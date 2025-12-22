@@ -40,6 +40,7 @@ class RMServer(rm_pb2_grpc.RMServerServicer):
         """
         # print("Called R worker")
         message_processed = MessageToDict(request, including_default_value_fields=True)
+        # message_processed = MessageToDict(request)
         # TODO: Put a lock here
         self.added_servers.put(message_processed)
         # print("Length of added server queue {}".format(self.added_servers.qsize()))
@@ -167,8 +168,6 @@ def start_server(rmserver: RMServer, rm_server_rpc_port: int) -> grpc.server:
     server.add_insecure_port(f"[::]:{rm_server_rpc_port}")
     server.start()
     return server
-
-
 if __name__ == "__main__":
     logging.basicConfig()
     server()

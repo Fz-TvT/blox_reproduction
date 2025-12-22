@@ -138,13 +138,131 @@ class JobPlacement(object):
                     mark_gpu_in_use(gpu_df, placement, job_id)
                 else:
                     break
+        
 
-            return (jobs_to_terminate, jobs_to_launch)
-
+            return jobs_to_terminate, jobs_to_launch
+        
             # accel_sorted_by_pref - key: gpu_type, val: list of job ids sorted
             # by decreasing preference
+        # elif scheduler=="Srtf" :
+        #     total_gpus=len(gpu_df)
+        #     free_gpus=find_free_GPUs(gpu_df)
+        #     for idx,job_id in enumerate(job_order):
+        #         if job["is_running"] == True:
+        #             # move to lower priority jobs
+        #             running_jobs += 1
+        #             continue
+        #         if job["is_running"] == False:
+        #             req_gpus=active_jobs[job_id]["num_GPUs"]
+        #             job=activae_jobs[job_id]
+        #             found=False                 
+        #             place_consolidated = (
+        #                 job.get("placement_preference") == "consolidated"
+        #                 )
+        #             if req_gpus<=len(free_gpus):
+        #                 #直接分配
+        #                 if place_consolidated:
+        #                     placement, found = self._consolidated_placement(job, free_gpus)
+        #                 else:
+        #                     placement, found = self._scattered_placement(job, free_gpus)
+        #                 if found:
+        #                     job_to_launch[job_id]=placement
+        #                     mark_gpu_in_use(gpu_df,placement,job_id)
+        #                     #更新free gpus
+        #                     free_gpus=find_free_GPUs(gpu_df)
+        #             else:
+        #                 needed_gpus=req_gpus-len(free_gpus)
+        #                 freed_gpus=0 ##释放的Gpu数量
+        #                 for r_idx,r_job_id in enumerate(reversed(job_order[idx:])):
+        #                     potential_job=active_jobs[r_job_id]
+        #                     if potential_job["is_running"]==True:
+        #                         #terminate this job
+        #                         jobs_to_terminate.append(r_job_id)
+        #                         potential_job["is_running"]=False
+        #                         delete_job_by_id(gpu_df,r_job_id)
+        #                         freed_gpus+=potential_job["num_GPUs"]
+        #                         free_gpus=find_free_GPUs(gpu_df)
+        #                         if freed_gpus>=needed_gpus:
+        #                             break
+        #                 if freed_gpus>=needed_gpus:
+        #                     #找到足够的GPU
+        #                     if place_consolidated:
+        #                         placement, found = self._consolidated_placement(job, free_gpus)
+        #                     else:
+        #                         placement, found = self._scattered_placement(job, free_gpus)
+        #                     if found:
+        #                         job_to_launch[job_id]=placement
+        #                         mark_gpu_in_use(gpu_df,placement,job_id)
+        #                         #更新free gpus
+        #                         free_gpus=find_free_GPUs(gpu_df)
+        #                     else:
+        #                         #没找到合适的placement
+        #                         break
+        #                 else:
+        #                     #没找到足够的GPU
+        #                     break
+        #     return jobs_to_terminate, job_to_launch
+                        
+        elif scheduler=="New":
+            total_gpus=len(gpu_df)
+            free_gpus=find_free_GPUs(gpu_df)
+            for idx,job_id in enumerate(job_order):
+                if job["is_running"] == True:
+                    # move to lower priority jobs
+                    running_jobs += 1
+                    continue
+                if job["is_running"] == False:
+                    req_gpus=active_jobs[job_id]["num_GPUs"]
+                    job=activae_jobs[job_id]
+                    found=False                 
+                    place_consolidated = (
+                        job.get("placement_preference") == "consolidated"
+                        )
+                    if req_gpus<=len(free_gpus):
+                        #直接分配
+                        if place_consolidated:
+                            placement, found = self._consolidated_placement(job, free_gpus)
+                        else:
+                            placement, found = self._scattered_placement(job, free_gpus)
+                        if found:
+                            job_to_launch[job_id]=placement
+                            mark_gpu_in_use(gpu_df,placement,job_id)
+                            #更新free gpus
+                            free_gpus=find_free_GPUs(gpu_df)
+                    else:
+                        needed_gpus=req_gpus-len(free_gpus)
+                        freed_gpus=0 ##释放的Gpu数量
+                        for r_idx,r_job_id in enumerate(reversed(job_order[idx:])):
+                            potential_job=active_jobs[r_job_id]
+                            if potential_job["is_running"]==True:
+                                #terminate this job
+                                jobs_to_terminate.append(r_job_id)
+                                potential_job["is_running"]=False
+                                delete_job_by_id(gpu_df,r_job_id)
+                                freed_gpus+=potential_job["num_GPUs"]
+                                free_gpus=find_free_GPUs(gpu_df)
+                                if freed_gpus>=needed_gpus:
+                                    break
+                        if freed_gpus>=needed_gpus:
+                            #找到足够的GPU
+                            if place_consolidated:
+                                placement, found = self._consolidated_placement(job, free_gpus)
+                            else:
+                                placement, found = self._scattered_placement(job, free_gpus)
+                            if found:
+                                job_to_launch[job_id]=placement
+                                mark_gpu_in_use(gpu_df,placement,job_id)
+                                #更新free gpus
+                                free_gpus=find_free_GPUs(gpu_df)
+                            else:
+                                #没找到合适的placement
+                                break
+                        else:
+                            #没找到足够的GPU
+                            break
+            return jobs_to_terminate, job_to_launch
 
-        if scheduler is None:
+        else:
             running_jobs = 0
             new_scheduled_jobs = 0
             jobs_to_schedule = 0
@@ -161,7 +279,6 @@ class JobPlacement(object):
                     place_consolidated = (
                         job.get("placement_preference") == "consolidated"
                     )
-
                     # first checking if there are free GPUs
                     free_gpus = find_free_GPUs(gpu_df)
                     if place_consolidated:
@@ -239,7 +356,7 @@ class JobPlacement(object):
                 # found a node with more GPUs then needed
                 if min_more_GPUs > len(free_gpus[node]):
                     min_more_GPUs = len(free_gpus[node])
-                    node_with_min_moRE_gpUs = node
+                    node_with_min_more_GPUs = node
         if node_with_min_more_GPUs is not None:
             # only extracting the GPUs we need
             return (free_gpus[node_with_min_more_GPUs][:numGPUs_needed], True)

@@ -33,6 +33,7 @@ class Workload(object):
     def __init__(
         self,
         cluster_job_log,
+        scheduler,
         jobs_per_hour=5,
         sum_attempts=True,
         exponential=False,
@@ -45,6 +46,7 @@ class Workload(object):
         per_server_size=None,
         num_jobs_default=5,
         trace=None,
+        workload_type=None
     ):
         if trace is not None:
             self.workload_type = "replay"
@@ -78,6 +80,7 @@ class Workload(object):
         if self.workload_type == "philly":
             self.jobs = self.get_philly_jobs(
                 cluster_job_log,
+                scheduler,
                 sum_attempts,
                 exponential,
                 multigpu,
@@ -102,6 +105,7 @@ class Workload(object):
     def get_philly_jobs(
         self,
         cluster_job_log,
+        scheduler,
         sum_attempts,
         exponential=False,
         multigpu=False,
@@ -134,6 +138,7 @@ class Workload(object):
             else:
                 jobs = parse_philly_jobs.parse_jobs(
                     cluster_job_log,
+                    scheduler,
                     sum_attempts,
                     exponential,
                     multigpu,
@@ -166,6 +171,7 @@ class Workload(object):
             else:
                 jobs = parse_philly_jobs.parse_jobs(
                     cluster_job_log,
+                    scheduler,
                     sum_attempts,
                     exponential,
                     multigpu,
@@ -294,6 +300,8 @@ class Workload(object):
         total_job_durations.plot_cdf()
 
     def generate_next_job(self, last_job_arrival_time, arrival=-1):
+        self.generated_count = 0
+        self.max_jobs = 100
         if self.workload_type == "philly":
             job = self.jobs[self.job_id % self.total_jobs]
             job.job_id = self.job_id
@@ -306,6 +314,8 @@ class Workload(object):
                 if self.series_id_filter[0] <= job.job_id < self.series_id_filter[1]:
                     job.job_priority = 1
         else:
+            # if self.generated_count >= self.max_jobs:
+            #     raise StopIteration("Reached max jobs")
             job_id = self.job_id
             tenant_id = 0
             inter_arrival_time = poisson_next_arrival_time(self.jobs_per_hour)
@@ -338,7 +348,7 @@ class Workload(object):
                 iter_is_duration=True,
             )
         self.job_id += 1
-
+        self.generated_count +=1
         job.job_task, job.job_class_id = self.model_zoo.get_job_class()
 
         # Update job iter times and CPU, Mem profiles for the job
@@ -379,7 +389,7 @@ class Workload(object):
             job_arrival_times[i] = last_arrival_time
         job_iteration_times = [5] * num_jobs
         job_total_iterations = [720] * num_jobs
-        job_gpu_demands = [4] * num_jobs
+        job_gpu_demands = [1] * num_jobs
         job_packing_scores = np.zeros((num_jobs, num_jobs))
         num_placement_options = 2
         job_placement_scores = np.ones((num_jobs, num_placement_options))

@@ -4,7 +4,7 @@ import json
 import grpc
 import argparse
 import numpy as np
-from workload import Workload
+from workload.workload import Workload
 from concurrent import futures
 from typing import Tuple
 
@@ -52,6 +52,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         num_cpu_cores=16,
         num_jobs_default=0,
         exp_prefix="test",
+        prev_job_time=0
     ):
         self.cluster_job_log = cluster_job_log
         self.list_jobs_per_hour = list_jobs_per_hour
@@ -76,7 +77,6 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         self.is_numa_available = is_numa_available
         self.num_cpu_cores = num_cpu_cores
         self.ipaddr_rm = f"{ipaddr_resource_manager}:50051"
-
         # self.jobs_to_run = Workload(cluster_job_log)
         # setup the training
         self.simulator_config = list()
@@ -107,7 +107,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
             # reseting the job time
             self.prev_job_time = 0
             self.prev_job = None
-            print("Job config {}".format(job_config))
+            # print("Job config {}".format(job_config))
             return job_config_send
         except IndexError:
             # list empty signal to terminate
@@ -119,7 +119,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
             job_config_send = rm_pb2.JsonResponse()
             job_config_send.response = json.dumps(job_config)
             # self.setup_cluster()
-            # self._plot_graphs()
+            self._plot_graphs()
             return job_config_send
 
     def GetJobs(self, request, context) -> rm_pb2.JsonResponse:
@@ -134,17 +134,26 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         while True:
             try:
                 if self.prev_job is None:
-                    new_job = self.workload.generate_next_job(self.prev_job_time)
+                    if self.workload.job_id >= self.workload.total_jobs:
+                        print("no more jobs to add")
+                        valid_jobs = rm_pb2.JsonResponse()
+                        valid_jobs.response = json.dumps(job_to_run_dict)
+                        return valid_jobs
+                    new_job = self.workload.generate_next_job(self.prev_job_time,-1)
                     new_job_dict = self._clean_sim_job(new_job.__dict__)
                 if self.prev_job is not None:
-                    print("Self previous job")
+                    # print("Self previous job")
                     new_job_dict = self.prev_job
-                print(
-                    "New job dict arrival time {}".format(
-                        new_job_dict["job_arrival_time"]
-                    )
-                )
+                # print(
+                #     "New job dict arrival time {}".format(
+                #         new_job_dict["job_arrival_time"]
+                #     )
+                # )
                 if new_job_dict["job_arrival_time"] <= simulator_time:
+                    if new_job_dict.get("job_mem_demand"):
+                        del new_job_dict["job_mem_demand"]
+                    if new_job_dict.get("job_mem_demand_orig"):
+                        del new_job_dict["job_mem_demand_orig"]
                     print("In getting more jobs")
                     job_to_run_dict[jcounter] = new_job_dict
                     self.prev_job_time = new_job_dict["job_arrival_time"]
@@ -152,17 +161,17 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
                     jcounter += 1
                 if new_job_dict["job_arrival_time"] > simulator_time:
                     # no more jobs for next time
-                    print("returning previos job")
+                    # print("returning previous job")
                     valid_jobs = rm_pb2.JsonResponse()
                     valid_jobs.response = json.dumps(job_to_run_dict)
                     self.prev_job = new_job_dict
                     self.prev_job_time = new_job_dict["job_arrival_time"]
-                    print("Json dump and return")
+                    # print("Json dump and return")
                     return valid_jobs
             except Exception as e:
                 # somewhere there is logger called in workload. I am just
                 # trying to avoid that possibly
-                print("Exception e {}".format(e))
+                # print("Exception e {}".format(e))
                 traceback.print_exc()
                 # pass
 
@@ -193,28 +202,36 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
             file_names_cluster_stats = list()
             for load in self.list_jobs_per_hour:
                 stat_fname = f"{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_{scheduler}_load_{load}_job_stats.json"
-                print(stat_fname)
+                # print(stat_fname)
                 with open(stat_fname, "r") as fin:
                     data_job = json.load(fin)
-                print(scheduler, load)
+                # print(scheduler, load)
                 jct_dict[scheduler][load] = self._get_avg_jct(data_job)
                 # print("Wrote to dict")
         fig, ax1 = plt.subplots(1, 1)
         fig.set_size_inches(10, 3)
         matplotlib.rcParams["pdf.fonttype"] = 42
         matplotlib.rcParams["ps.fonttype"] = 42
-        print("Job completion dict {}".format(jct_dict))
+        # print("Job completion dict {}".format(jct_dict))
         for scheduler in self.schedulers:
             plot_list = list()
             # x_labels = list()
             for load in self.list_jobs_per_hour:
                 plot_list.append(jct_dict[scheduler][load])
+            fig, ax1 = plt.subplots(1, 1)
+            fig.set_size_inches(10, 3)   # 宽 10 英寸，高 3 英寸
             ax1.plot(self.list_jobs_per_hour, plot_list, label=scheduler)
-
-        ax1.legend()
-        ax1.set_title("Average JCT")
-        plt.savefig("jct.pdf", format="pdf", dpi=600, bbox_inches="tight")
-
+            print("plot_list {}".format(plot_list))
+        write_folder = f"./plots/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_{scheduler}_load_{load}"
+        if not os.path.exists(write_folder):
+            os.makedirs(write_folder)
+        ax1.set_title(f"{scheduler}_load_{load}_Average_JCT")
+        plt.savefig(
+                    os.path.join(write_folder, f"{scheduler}_load_{load}_jct.pdf"),
+                    format="pdf",
+                    dpi=600,
+                    bbox_inches="tight",
+                )
         # plot cdf
 
         for scheduler in self.schedulers:
@@ -230,7 +247,6 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
                     plot_y_val.append(float(idx) / len(vals))
                 write_folder = f"./plots/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_{scheduler}_load_{load}"
                 if not os.path.exists(write_folder):
-
                     os.makedirs(write_folder)
                 fig, ax1 = plt.subplots(1, 1)
                 fig.set_size_inches(10, 3)
@@ -261,7 +277,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
                 ax1.set_title(f"{scheduler}_load_{load}_gpu_demand")
                 ax1.set_xscale("log")
                 ax1.plot(data_job.keys(), gpu_demand)
-
+                print("data_key",data_job.keys())
                 write_folder = f"./plots/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_{scheduler}_load_{load}"
                 if not os.path.exists(write_folder):
 
@@ -278,9 +294,9 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
                 fig, ax1 = plt.subplots(1, 1)
                 fig.set_size_inches(10, 3)
                 ax1.set_title(f"{scheduler}_load_{load}_free_GPUs")
-                ax1.plot(data_job.keys(), free_gpu)
+                ax1.plot(data_job.keys(), free_gpus)
                 plt.savefig(
-                    os.path.join(write_folder, f"{scheduler}_load_{load}_free_gpu.pdf"),
+                    os.path.join(write_folder, f"{scheduler}_load_{load}_free_gpus.pdf"),
                     format="pdf",
                     dpi=600,
                     bbox_inches="tight",
@@ -374,7 +390,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
             with grpc.insecure_channel(self.ipaddr_rm) as channel:
                 stub = rm_pb2_grpc.RMServerStub(channel)
                 response = stub.RegisterWorker(request_to_rm)
-        print("Number of machines sent {}".format(count))
+        # print("Number of machines sent {}".format(count))
         return None
 
     def NotifyCompletion(self, request, context):
@@ -403,11 +419,11 @@ def parse_args(parser):
     )
     parser.add_argument("--jobs-per-hour", type=int, default=5, help="Jobs per hour")
     parser.add_argument(
-        "--start-job-track", type=int, default=3000, help="Start ID of job to track"
+        "--start-job-track", type=int, default=0, help="Start ID of job to track"
     )
 
     parser.add_argument(
-        "--end-job-track", type=int, default=4000, help="End ID of job to track"
+        "--end-job-track", type=int, default=100, help="End ID of job to track"
     )
     parser.add_argument(
         "--scheduler", type=str, default="Fifo", help="Name of the scheduler"
@@ -432,35 +448,33 @@ def launch_server(args) -> grpc.Server:
     Launches the server
     """
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
-
-    simulator_pb2_grpc.add_SimServerServicer_to_server(
-        SimulatorRunner(
+    runner = SimulatorRunner(
             args.cluster_job_log,
             np.arange(args.jobs_per_hour, args.jobs_per_hour + 1, 1.0).tolist(),
             (args.start_job_track, args.end_job_track),
-            [
-                "Las",
-            ],
+            ["Las"],
             ["Place"],
             ["AcceptAll"],
             exp_prefix=args.exp_prefix,
-        ),
-        server,
-    )
+        )
+    
+    simulator_pb2_grpc.add_SimServerServicer_to_server(runner, server)
     server.add_insecure_port(f"[::]:{args.simulator_rpc_port}")
     server.start()
     print("Print Server started")
-    return server
+    return server,runner
 
 
 if __name__ == "__main__":
     args = parse_args(argparse.ArgumentParser(description="Arguments for simulation"))
+    print("Arguments {}".format(args))  
     try:
-        server = launch_server(args)
+        server,runner = launch_server(args)
         server.wait_for_termination()
     except KeyboardInterrupt:
         server.stop(0)
         print("Exit by ctrl c")
+    runner._plot_graphs()
 
     # simulator = SimulatorRunner(
     # args.cluster_job_log,

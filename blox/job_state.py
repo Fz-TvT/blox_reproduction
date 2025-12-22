@@ -36,7 +36,11 @@ class JobState(object):
         self.finished_job = dict()  # keys are ids of the jobs which have finished
         self.job_ids_to_track = list(range(args.start_id_track, args.stop_id_track + 1))
         self.time = 0
-
+        self.scheduler_name = args.scheduler_name
+        ##added for Pollux
+        if self.scheduler_name == "Pollux":
+            self.interference = args.interference
+            self.round_duration = args.round_duration
     # def get_new_jobs(self):
     # """
     # Fetch any new jobs which have arrived at the scheduler
@@ -69,18 +73,18 @@ class JobState(object):
                     # add scheduler side metrics
                     # TODO: Good to have a separate function for this in future
                     if (
-                        "attained_service_scheduler"
+                        "attained_service"
                         in self.active_jobs[jid]["tracked_metrics"]
                     ):
                         metric_data[jid][
-                            "attained_service_scheduler"
+                            "attained_service"
                         ] = self.active_jobs[jid]["tracked_metrics"][
-                            "attained_service_scheduler"
+                            "attained_service"
                         ] + (
                             round_duration * self.active_jobs[jid]["num_GPUs"]
                         )
                     else:
-                        metric_data[jid]["attained_service_scheduler"] = round_duration
+                        metric_data[jid]["attained_service"] = round_duration
                     self.active_jobs[jid]["tracked_metrics"].update(
                         metric_data.get(jid)
                     )
@@ -112,13 +116,25 @@ class JobState(object):
                     # TODO: Make this more permanent
                     if "tracked_metrics" not in jobs:
                         # if not in job dict
-                        params_to_track = ["per_iter_time", "attained_service"]
+                        params_to_track = ["per_iter_time", "attained_service","attained_service_scheduler"] ##如果需要添加获得服务时间 要修改 已经改动
                         default_values_param = [0, 0]
                         tracking_dict = dict()
                         for p, v in zip(params_to_track, default_values_param):
                             tracking_dict[p] = v
                         jobs["tracked_metrics"] = tracking_dict
-
+                    ##added for Pollux
+                    if self.scheduler_name == "Pollux":
+                        """
+                        Create pollux.job.Job object, decide how to refer to model name, the options of which include
+                        "bert", "cifar10", "ncf", "imagenet", "deepspeech2", "yolov3"
+                        """
+                        print(jobs)
+                        job_temp = Job(self.job_counter, APPLICATIONS[jobs["application"]],
+                                       jobs["job_arrival_time"], self.time)
+                        if job_temp.application.name == "ncf":
+                            job_temp.target_batch_size = 32768
+                        jobs["tracked_metrics"]["pollux_metrics"] = job_temp
+                    ##added for Pollux
                     jobs["time_since_scheduled"] = 0
                     jobs["job_priority"] = 999
                     jobs["previously_launched"] = False
@@ -128,3 +144,23 @@ class JobState(object):
                 except IndexError:
                     # remove the job counter
                     break
+        return int(self.job_counter)     #给作业计数
+    
+    #optimus added function
+    def predict_iter_time(self, job_id: int, num_gpus: int) -> float:
+        """
+        Predict iteration time based on previous iteration time and number of gpus
+        """
+        job_info = self.active_jobs[job_id]
+        prev_iter_time = job_info["tracked_metrics"]["per_iter_time"]
+        alpha = job_info["optimus"]["alpha"]
+        beta = job_info["optimus"]["beta"]
+        predicted_time = beta*(num_gpus+0.001)/(1 + alpha * (num_gpus))
+        return predicted_time   
+    #optimus added function
+    def predict_throughput(self, remaining_time:int, job_id: int, num_gpus: int) -> float:
+        """
+        Predict throughput based on previous iteration time and number of gpus
+        """
+        return remaining_time / self.predict_iter_time(job_id, num_gpus)
+    
