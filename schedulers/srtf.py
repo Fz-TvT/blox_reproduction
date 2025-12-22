@@ -35,7 +35,7 @@ class Srtf(SchedulingPolicy):
             )
         sorted_job_order = sorted(
             job_dict.items(),
-            key=lambda x: (x[1]["job_priority"], x[1]["time_remaining"]),
+            key=lambda x: (x[1]["job_iteration_time"], x[1]["time_remaining"])
         )
 
         schedule_info = dict()

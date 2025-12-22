@@ -10,7 +10,7 @@ class Tiresias(SchedulingPolicy):
     Implements Least attained service scheduler
     """
 
-    def __init__(self, args, num_queus=1, service_per_queue=[1]):
+    def __init__(self, args, num_queus=1, service_per_queue=[10000]):
         """
         Use this to hold any extra state the scheduler wants to hold
         """

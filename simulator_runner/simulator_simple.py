@@ -51,7 +51,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         is_numa_available=False,
         num_cpu_cores=16,
         num_jobs_default=0,
-        exp_prefix="test",
+        exp_prefix="test"
     ):
         self.cluster_job_log = cluster_job_log
         self.list_jobs_per_hour = list_jobs_per_hour
@@ -199,21 +199,21 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
                 print(scheduler, load)
                 jct_dict[scheduler][load] = self._get_avg_jct(data_job)
                 # print("Wrote to dict")
-        fig, ax1 = plt.subplots(1, 1)
-        fig.set_size_inches(10, 3)
-        matplotlib.rcParams["pdf.fonttype"] = 42
-        matplotlib.rcParams["ps.fonttype"] = 42
-        print("Job completion dict {}".format(jct_dict))
-        for scheduler in self.schedulers:
-            plot_list = list()
-            # x_labels = list()
-            for load in self.list_jobs_per_hour:
-                plot_list.append(jct_dict[scheduler][load])
-            ax1.plot(self.list_jobs_per_hour, plot_list, label=scheduler)
+                fig, ax1 = plt.subplots(1, 1)
+                fig.set_size_inches(10, 3)
+                matplotlib.rcParams["pdf.fonttype"] = 42
+                matplotlib.rcParams["ps.fonttype"] = 42
+                print("Job completion dict {}".format(jct_dict))
+                for scheduler in self.schedulers:
+                    plot_list = list()
+                    # x_labels = list()
+                    for load in self.list_jobs_per_hour:
+                        plot_list.append(jct_dict[scheduler][load])
+                    ax1.plot(self.list_jobs_per_hour, plot_list, label=scheduler)
 
-        ax1.legend()
-        ax1.set_title("Average JCT")
-        plt.savefig("jct.pdf", format="pdf", dpi=600, bbox_inches="tight")
+                ax1.legend()
+                ax1.set_title("Average JCT")
+                plt.savefig("jct.pdf", format="pdf", dpi=600, bbox_inches="tight")
 
         # plot cdf
 

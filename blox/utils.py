@@ -7,7 +7,7 @@ from cluster_state import ClusterState
 from job_state import JobState
 
 from typing import Tuple, List
-
+import os
 
 def remove_post_termination(jobs_terminated, job_state, cluster_state):
     for jid in jobs_terminated:
@@ -231,7 +231,12 @@ def prune_jobs(job_state: JobState, cluster_state: ClusterState, blr: BloxManage
                                 job_state.job_runtime_stats[jid] = copy.deepcopy(
                                     job_state.active_jobs[jid]
                                 )
-
+                            ##added for Pollux
+                            if job_state.scheduler_name == "Pollux":
+                                    del job_state.job_runtime_stats[jid]["tracked_metrics"]["pollux_metrics"]
+                                    job_state.job_runtime_stats[jid]["completion_time_pollux"] = job_state.active_jobs[jid]["tracked_metrics"]["pollux_metrics"].completion_time
+                                    job_state.job_runtime_stats[jid]["submission_time_pollux"] = job_state.active_jobs[jid]["tracked_metrics"]["pollux_metrics"].submission_time
+                            ##added for Pollux
                             jid_to_terminate.append(jid)
                             # delete GPU utilization
                             _free_gpu_by_jobid(jid, cluster_state.gpu_df)
@@ -322,39 +327,35 @@ def track_finished_jobs(
 
 
 def write_log_files(job_state, cluster_state, blr):
-
+    os.makedirs("result", exist_ok=True)
     with open(
-        f"{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_job_stats.json",
+        f"result/{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_job_stats.json",
         "w",
     ) as fopen:
-        # fopen.write(json.dumps(self.job_completion_stats))
         json.dump(job_state.job_completion_stats, fopen)
 
     with open(
-        f"{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_cluster_stats.json",
+        f"result/{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_cluster_stats.json",
         "w",
     ) as fopen:
-        # fopen.write(json.dumps(self.cluster_stats))
         json.dump(cluster_state.cluster_stats, fopen)
     # sys.exit(0)
     with open(
-        f"{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_run_time_stats.json",
+        f"result/{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_run_time_stats.json",
         "w",
     ) as fopen:
-        # fopen.write(json.dumps(self.cluster_stats))
         json.dump(job_state.job_runtime_stats, fopen)
 
     with open(
-        f"{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_responsivness.json",
+        f"result/{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_responsivness.json",
         "w",
     ) as fopen:
-        # fopen.write(json.dumps(self.cluster_stats))
         json.dump(job_state.job_responsiveness_stats, fopen)
+
     with open(
-        f"{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_custom_metrics.json",
+        f"result/{blr.exp_prefix}_{job_state.job_ids_to_track[0]}_{job_state.job_ids_to_track[-1]}_{blr.scheduler_name}_load_{blr.load}_custom_metrics.json",
         "w",
     ) as fopen:
-        # fopen.write(json.dumps(self.cluster_stats))
         json.dump(job_state.custom_metrics, fopen)
 
 

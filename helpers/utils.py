@@ -49,9 +49,9 @@ def get_total_iteration_exp(range_min, range_max):
 
 def get_gavel_like_iter():
     if random.random() >= 0.8:
-        iters = 60 * (10 ** random.uniform(3,4))
+        iters = 60 * (10 ** random.uniform(3,4))/1000
     else:
-        iters = 60 * (10 ** random.uniform(1.5,3))
+        iters = 60 * (10 ** random.uniform(1.5,3))/1000
     return iters
 
 def small_trace_dur():

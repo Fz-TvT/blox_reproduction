@@ -4,11 +4,12 @@ from copy import deepcopy
 from operator import getitem
 
 from typing import Optional
+import cvxpy as cp
 
 from policy import Policy, PolicyWithPacking
 from proportional import ProportionalPolicy
 
-
+self._solver = cp.SCS
 class Gavel(SchedulingPolicy):
     """
     Implement Gavels Maxmin Fairness Policy1
@@ -39,23 +40,24 @@ class Gavel(SchedulingPolicy):
         priority_weights = dict()
         unflattened_throughputs = dict()
 
-        cluster_spec = gpu_df.GPU_type.value_counts().to_dict()
+        cluster_spec = gpu_df.GPU_type.value_counts().to_dict() ##确定集群规格
 
         for jid in job_dict.keys():
             job_throughputs[jid] = job_dict[jid]["throughput"]
             scale_factors[jid] = job_dict[jid]["job_gpu_demand"]
             priority_weights[jid] = job_dict[jid]["priority_weights"]
 
-        new_unflattened_throughput = dict()
+        ##在每个gpu类型上的吞吐量，所有值设为1.0
+        new_unflattened_throughput = dict() 
 
         for job_id in unflattened_throughputs:
             new_unflattened_throughputs[job_id] = {}
             for worker_type in unflattened_throughputs[job_id]:
-                new_unflattened_throughputs[job_id][worker_type] = 1.0
+                new_unflattened_throughputs[job_id][worker_type] = 1.0 #
 
         allocation_gavel = self._max_min_fairness_perf_policy.get_allocation(
             new_unflattened_throughput, scale_factors, priority_weights, cluster_spec
-        )
+        ) 
         return allocation_gavel
 
 

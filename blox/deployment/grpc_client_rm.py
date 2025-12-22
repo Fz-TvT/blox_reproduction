@@ -183,6 +183,9 @@ class ResourceManagerComm(object):
         #CAUTION: In case simulation we modify some of the parameters in place.
         """
         # TODO: Multi-thread this
+
+        # acclerate = lambda x: x/1.5
+        
         metric_data_dict = dict()
         for idx, job_id in enumerate(job_id_list):
             ipaddr_to_query = ipaddr_list[idx]
@@ -229,18 +232,18 @@ class ResourceManagerComm(object):
             else:
                 # this is a simulation
                 # profile scaling by number of GPUs
-                # total_gpus = [5, 3, 1.4, 1.2, 1.1, 1.0, 1.0, 1.0, 1.0]
-                # self.optimus_scale_by_gpus = {
-                # "1.0": total_gpus[0],
-                # "2.0": total_gpus[1],
-                # "3.0": total_gpus[2],
-                # "4.0": total_gpus[3],
-                # "5.0": total_gpus[4],
-                # "6.0": total_gpus[5],
-                # "7.0": total_gpus[6],
-                # "8.0": total_gpus[7],
-                # "9.0": total_gpus[8],
-                # }
+                total_gpus = [5, 3, 1.4, 1.2, 1.1, 1.0, 1.0, 1.0, 1.0]
+                self.optimus_scale_by_gpus = {
+                "1.0": total_gpus[0],
+                "2.0": total_gpus[1],
+                "3.0": total_gpus[2],
+                "4.0": total_gpus[3],
+                "5.0": total_gpus[4],
+                "6.0": total_gpus[5],
+                "7.0": total_gpus[6],
+                "8.0": total_gpus[7],
+                "9.0": total_gpus[8],
+                }
                 if active_job_dict[job_id]["previously_launched"] == False:
                     active_job_dict[job_id]["job_launched_first_time"] = True
                 if active_job_dict[job_id]["previously_launched"] == True:
@@ -250,7 +253,7 @@ class ResourceManagerComm(object):
 
                 total_iterations_in_round = (
                     round_duration / active_job_dict[job_id]["job_iteration_time"]
-                )
+                ) ##计算本轮能完成多少迭代
                 attained_service = (
                     active_job_dict[job_id]["tracked_metrics"]["attained_service"]
                     + round_duration
@@ -260,17 +263,20 @@ class ResourceManagerComm(object):
 
                 total_iteration_achieved = (
                     total_iterations_in_round
-                    + active_job_dict[job_id]["job_executed_iteration"]
-                )
+                    + active_job_dict[job_id]["job_executed_iteration"])
+                #新的总迭代次数=本轮完成的迭代次数+历史已经完成的迭代次数
                 if os.environ["sched_policy"] == "Optimus":
                     total_iteration_achieved = (
                         total_iterations_in_round
-                        * self.optimus_scale_by_gpus[
-                            active_job_dict[job_id]["total_gpus"]
-                        ]
+                        *self.optimus_scale_by_gpus[active_job_dict[job_id]["total_gpus"]]
                         + active_job_dict[job_id]["job_executed_iteration"]
                     )
-                if (
+                # print("gpu",self.optimus_scale_by_gpus[str(active_job_dict[job_id]["job_gpu_demand"])])
+                ##added for Pollux
+                if os.environ["sched_policy"] == "Pollux":
+                    if active_job_dict[job_id]["tracked_metrics"]["pollux_metrics"].completion_time is not None:
+                        job_exit = True
+                elif (
                     total_iteration_achieved
                     >= active_job_dict[job_id]["job_total_iteration"]
                 ):
