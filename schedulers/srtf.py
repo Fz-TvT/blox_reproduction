@@ -35,9 +35,11 @@ class Srtf(SchedulingPolicy):
             )
         sorted_job_order = sorted(
             job_dict.items(),
-            key=lambda x: (x[1]["job_iteration_time"], x[1]["time_remaining"])
+            key=lambda x: (x[1]["job_priority"], x[1]["time_remaining"])
         )
-
+        for job in sorted_job_order:
+            if job[1]["time_since_scheduled"] > 10 * 3600:
+                job[1]["job_priority"] = 1
         schedule_info = dict()
         schedule_info["job_order"] = sorted_job_order
         schedule_info["run_all_jobs"] = False

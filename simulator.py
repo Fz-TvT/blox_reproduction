@@ -44,7 +44,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         small_trace=False,
         placement=True,
         prioritize=False,
-        round_duration=30,
+        round_duration=300,
         number_of_machines=10,
         gpus_per_machine=10,
         memory_per_machine=16,
@@ -369,6 +369,21 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
             new_job.pop("job_task")
         if "job_model" in new_job:
             new_job.pop("job_model")
+        
+        # Handle NumPy arrays (convert to list or remove)
+        # This is needed because JSON cannot serialize NumPy arrays
+        import numpy as np
+        keys_to_remove = []
+        for key, value in new_job.items():
+            if isinstance(value, np.ndarray):
+                # Option 1: Convert to list (if you need the data)
+                # new_job[key] = value.tolist()
+                # Option 2: Remove (if not needed for simulation)
+                keys_to_remove.append(key)
+        
+        # Remove NumPy arrays
+        for key in keys_to_remove:
+            new_job.pop(key)
 
         new_job["num_GPUs"] = new_job["job_gpu_demand"]
         # new_job["params_to_track"] = [
@@ -474,7 +489,7 @@ def parse_args(parser):
     )
 
     parser.add_argument(
-        "--end-job-track", type=int, default=10, help="End ID of job to track"
+        "--end-job-track", type=int, default=100, help="End ID of job to track"
     )
     parser.add_argument(
         "--scheduler", type=str, default="Fifo", help="Name of the scheduler"
@@ -502,11 +517,12 @@ def launch_server(args) -> grpc.Server:
             (args.start_job_track, args.end_job_track),
             [
                 # "Tiresias",
-                "Optimus",
-                "Fifo",
+                # "Optimus",
+                # "Fifo",
                 # "Las",
-                # "Srtf",
+                "Srtf",
                 # "New",
+                # "Syngery"
             ],
             ["Place"],
             ["AcceptAll"],

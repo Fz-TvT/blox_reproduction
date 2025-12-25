@@ -194,7 +194,7 @@ class ResourceManagerComm(object):
             if not if_sim:
                 # added tracking
                 previous_metric = active_job_dict[job_id]["tracked_metrics"]
-                metric_data_dict[job_id] = previous_metrics
+                metric_data_dict[job_id] = previous_metric
                 for ipaddr in ipaddr_to_query:
                     ipaddr = f"{ipaddr}:{self.rpc_port}"
                     metric_request = rm_pb2.JsonResponse()
@@ -232,18 +232,30 @@ class ResourceManagerComm(object):
             else:
                 # this is a simulation
                 # profile scaling by number of GPUs
-                total_gpus = [5, 3, 1.4, 1.2, 1.1, 1.0, 1.0, 1.0, 1.0]
-                self.optimus_scale_by_gpus = {
-                "1.0": total_gpus[0],
-                "2.0": total_gpus[1],
-                "3.0": total_gpus[2],
-                "4.0": total_gpus[3],
-                "5.0": total_gpus[4],
-                "6.0": total_gpus[5],
-                "7.0": total_gpus[6],
-                "8.0": total_gpus[7],
-                "9.0": total_gpus[8],
-                }
+                # 确保只初始化一次
+                if not hasattr(self, 'optimus_scale_by_gpus'):
+                    self.optimus_scale_by_gpus = {
+                        "0": 0.0,    # 0 GPU，无加速
+                        "1": 1.0,    # 基准
+                        "1.0": 1.0,    # 基准
+                        "2": 1.95,  # ~98% 效率
+                        "2.0": 1.95,  # ~98% 效率
+                        "3": 2.85,  # ~95% 效率
+                        "3.0": 2.85,  # ~95% 效率
+                        "4": 3.75,  # ~94% 效率
+                        "4.0": 3.75,  # ~94% 效率
+                        "5": 4.60,  # ~92% 效率
+                        "5.0": 4.60,  # ~92% 效率
+                        "6": 5.40,  # ~90% 效率
+                        "6.0": 5.40,  # ~90% 效率
+                        "7": 6.15,  # ~88% 效率
+                        "7.0": 6.15,  # ~88% 效率
+                        "8": 6.85,  # ~86% 效率
+                        "8.0": 6.85,  # ~86% 效率
+                        "9": 7.50,  # ~83% 效率
+                        "9.0": 7.50,  # ~83% 效率
+                        "10.0": 8.10,  # ~80% 效率
+                    }
                 if active_job_dict[job_id]["previously_launched"] == False:
                     active_job_dict[job_id]["job_launched_first_time"] = True
                 if active_job_dict[job_id]["previously_launched"] == True:
@@ -251,26 +263,51 @@ class ResourceManagerComm(object):
 
                 active_job_dict[job_id]["previously_launched"] = True
 
+                # 获取 GPU 数量（数值）
+                num_gpus = active_job_dict[job_id]["num_GPUs"]
+                # print("job_id",job_id)
+                # print("num_gpus",num_gpus)
+                # 如果 num_GPUs 为 0，作业没有运行，不应该有迭代进度
+                if num_gpus == 0:
+                    # 作业没有 GPU，不更新迭代进度，只更新 attained_service（为0）
+                    attained_service = (
+                        active_job_dict[job_id]["tracked_metrics"]["attained_service"]
+                        + 0  # 没有 GPU，不增加 attained_service
+                    )
+                    metric_data_dict[job_id] = {
+                        "attained_service": attained_service,
+                        "per_iter_time": active_job_dict[job_id]["job_iteration_time"],
+                    }
+                    continue
+
                 total_iterations_in_round = (
                     round_duration / active_job_dict[job_id]["job_iteration_time"]
                 ) ##计算本轮能完成多少迭代
+                
+                # attained_service 应该考虑 GPU 数量：如果有 N 个 GPU，每轮累加 round_duration * N
+                # 这与 attained_service_scheduler 的计算方式一致
                 attained_service = (
                     active_job_dict[job_id]["tracked_metrics"]["attained_service"]
-                    + round_duration
+                    + round_duration * num_gpus
                 )
 
                 per_iteration_time = active_job_dict[job_id]["job_iteration_time"]
 
-                total_iteration_achieved = (
-                    total_iterations_in_round
-                    + active_job_dict[job_id]["job_executed_iteration"])
+                # total_iteration_achieved = (
+                #     total_iterations_in_round
+                #     + active_job_dict[job_id]["job_executed_iteration"])
                 #新的总迭代次数=本轮完成的迭代次数+历史已经完成的迭代次数
-                if os.environ["sched_policy"] == "Optimus":
+                num_gpus = active_job_dict[job_id]["num_GPUs"]
+                # print("num_gpus",num_gpus)
+                if num_gpus != "0":
+                    scale_factor = self.optimus_scale_by_gpus.get(num_gpus)
                     total_iteration_achieved = (
-                        total_iterations_in_round
-                        *self.optimus_scale_by_gpus[active_job_dict[job_id]["total_gpus"]]
+                        total_iterations_in_round * num_gpus
                         + active_job_dict[job_id]["job_executed_iteration"]
                     )
+                else:
+                    total_iteration_achieved = active_job_dict[job_id]["job_executed_iteration"]
+                
                 # print("gpu",self.optimus_scale_by_gpus[str(active_job_dict[job_id]["job_gpu_demand"])])
                 ##added for Pollux
                 if os.environ["sched_policy"] == "Pollux":

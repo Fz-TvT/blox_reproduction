@@ -73,34 +73,33 @@ class JobState(object):
                     # add scheduler side metrics
                     # TODO: Good to have a separate function for this in future
                     if (
-                        "attained_service"
+                        "attained_service_scheduler"
                         in self.active_jobs[jid]["tracked_metrics"]
                     ):
                         metric_data[jid][
-                            "attained_service"
+                            "attained_service_scheduler"
                         ] = self.active_jobs[jid]["tracked_metrics"][
-                            "attained_service"
+                            "attained_service_scheduler"
                         ] + (
                             round_duration * self.active_jobs[jid]["num_GPUs"]
                         )
                     else:
-                        metric_data[jid]["attained_service"] = round_duration
+                        metric_data[jid]["attained_service_scheduler"] = round_duration* self.active_jobs[jid]["num_GPUs"]
                     self.active_jobs[jid]["tracked_metrics"].update(
                         metric_data.get(jid)
                     )
-
                     # Mark Job completion
                     # if "iter_num" in self.active_jobs[jid]["tracked_metrics"]:
-                    # num_iterations = self.active_jobs[jid]["tracked_metrics"][
-                    # "iter_num"
-                    # ]
-                    # if (
-                    # num_iterations
-                    # >= self.active_jobs[jid]["job_total_iteration"]
-                    # ):
-                    # self.active_jobs[jid]["tracked_metrics"].update(
-                    # {"job_exit": True}
-                    # )
+                    #     num_iterations = self.active_jobs[jid]["tracked_metrics"][
+                    #     "iter_num"
+                    #     ]
+                    #     if (
+                    #     num_iterations
+                    #     >= self.active_jobs[jid]["job_total_iteration"]
+                    #     ):
+                    #     self.active_jobs[jid]["tracked_metrics"].update(
+                    #     {"job_exit": True}
+                    #     )
         return None
 
     def add_new_jobs(self, new_jobs: List[dict]) -> None:
@@ -116,7 +115,7 @@ class JobState(object):
                     # TODO: Make this more permanent
                     if "tracked_metrics" not in jobs:
                         # if not in job dict
-                        params_to_track = ["per_iter_time", "attained_service","attained_service_scheduler"] ##如果需要添加获得服务时间 要修改 已经改动
+                        params_to_track = ["per_iter_time", "attained_service"] ##如果需要添加获得服务时间 要修改 已经改动                            
                         default_values_param = [0, 0]
                         tracking_dict = dict()
                         for p, v in zip(params_to_track, default_values_param):
@@ -145,22 +144,4 @@ class JobState(object):
                     # remove the job counter
                     break
         return int(self.job_counter)     #给作业计数
-    
-    #optimus added function
-    def predict_iter_time(self, job_id: int, num_gpus: int) -> float:
-        """
-        Predict iteration time based on previous iteration time and number of gpus
-        """
-        job_info = self.active_jobs[job_id]
-        prev_iter_time = job_info["tracked_metrics"]["per_iter_time"]
-        alpha = job_info["optimus"]["alpha"]
-        beta = job_info["optimus"]["beta"]
-        predicted_time = beta*(num_gpus+0.001)/(1 + alpha * (num_gpus))
-        return predicted_time   
-    #optimus added function
-    def predict_throughput(self, remaining_time:int, job_id: int, num_gpus: int) -> float:
-        """
-        Predict throughput based on previous iteration time and number of gpus
-        """
-        return remaining_time / self.predict_iter_time(job_id, num_gpus)
     

@@ -185,7 +185,7 @@ def parse_args(parser):
         "--start-id-track", type=int, default=0, help="Starting ID to track"
     )
     parser.add_argument(
-        "--stop-id-track", type=int, default=10, help="Stop ID to track"
+        "--stop-id-track", type=int, default=100, help="Stop ID to track"
     )
 
     args = parser.parse_args()
