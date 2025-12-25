@@ -40,7 +40,7 @@ class BloxManager(object):
         self.comm_node_manager = rm_client.ResourceManagerComm(
             node_manager_port=args.node_manager_port
         )
-        self.priority_thresh = 3600 * 1000  # above this we will have priority thresh
+        self.priority_thresh = 3600 * 10  # above this we will have priority thresh
         self.server, self.rmserver = launch_server(
             rm_server_rpc_port=args.central_scheduler_port,
             simulator_rpc_port=args.simulator_rpc_port,

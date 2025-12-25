@@ -362,9 +362,8 @@ class Job:
             return (time - self.job_arrival_time)
         # time elapsed since last execution
         return (time - self.job_last_execution_time)
-    
     def get_gpu_deficit(self):
-        # job unmet demand in number of gpus
+        # The number of Gpus still needed for a job 
         return (self.job_gpu_demand - len(self.gpus))
  
     @property

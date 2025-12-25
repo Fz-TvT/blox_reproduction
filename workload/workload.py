@@ -301,7 +301,6 @@ class Workload(object):
 
     def generate_next_job(self, last_job_arrival_time, arrival=-1):
         self.generated_count = 0
-        self.max_jobs = 100
         if self.workload_type == "philly":
             job = self.jobs[self.job_id % self.total_jobs]
             job.job_id = self.job_id
@@ -314,17 +313,15 @@ class Workload(object):
                 if self.series_id_filter[0] <= job.job_id < self.series_id_filter[1]:
                     job.job_priority = 1
         else:
-            # if self.generated_count >= self.max_jobs:
-            #     raise StopIteration("Reached max jobs")
             job_id = self.job_id
             tenant_id = 0
             inter_arrival_time = poisson_next_arrival_time(self.jobs_per_hour)
             job_arrival_time = last_job_arrival_time + inter_arrival_time
 
             job_iteration_time = 1
-            job_total_iteration = get_gavel_like_iter()
+            # job_total_iteration = get_gavel_like_iter()
             # job_total_iteration = get_total_iteration_exp(5000, 600000)
-            # job_total_iteration = get_total_iteration(5000, 140000)
+            job_total_iteration = get_total_iteration(5000, 140000)/100
 
             # job_total_iteration = get_total_iteration(5000, 500000)
             # job_total_iteration = get_total_iteration(5000, 50000)
@@ -356,7 +353,7 @@ class Workload(object):
         # add placement score and packing score for the job
 
         # TODO: commenting for not including synergy profile
-        # self.add_synergy_profile(job)
+        self.add_synergy_profile(job)
 
         # self.logger.info("Job {}, class={}, task={}".format(job.job_id, job.job_class_id, job.job_task))
         return job
