@@ -74,7 +74,8 @@ def main(args):
                 scheduling_policy = schedulers.Tiresias(args)
             elif args.scheduler_name == "New":
                 scheduling_policy = schedulers.New(args)
-
+            elif args.scheduler_name == "Synergy_fifo":
+                scheduling_policy = schedulers.Synergy_fifo(args)
             else:
                 
                 raise NotImplemented(f"{args.scheduler_name} not Implemented")

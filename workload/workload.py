@@ -188,7 +188,7 @@ class Workload(object):
         job_model = self.model_zoo.model(model_id, job.job_gpu_demand)
         job.job_model = job_model
         job.synergy_speedup = job.job_model.speedup
-        job.tput = job_model.tput
+        # job.tput = job_model.tput
         update_speed = False
         try:
             job.synergy_res_matrix = job_model.synergy_res_score

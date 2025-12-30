@@ -6,6 +6,7 @@ import logging
 from typing import List
 from concurrent import futures
 from collections import defaultdict
+import numpy as np
 
 sys.path.append(os.path.join((__file__), "./grpc_stubs"))
 import nm_pb2
@@ -15,6 +16,75 @@ import rm_pb2
 
 import simulator_pb2
 import simulator_pb2_grpc
+
+
+def get_tput_from_job_dict(job_dict, cpu_allocated=None, mem_allocated=None):
+    """
+    从字典形式的 job 中获取 tput
+    
+    Args:
+        job_dict: 作业字典
+        cpu_allocated: 分配的 CPU 数量（如果为 None，使用 job_dict["cpus"]）
+        mem_allocated: 分配的内存数量（如果为 None，使用 job_dict["mem"]）
+    
+    Returns:
+        tput 值（float），如果无法获取则返回 synergy_speedup 或 1.0（默认值）
+    """
+    # 首先检查是否有直接存储的 tput 值
+    if "tput" in job_dict and job_dict["tput"] is not None:
+        try:
+            tput_val = float(job_dict["tput"])
+            if tput_val > 0:
+                return tput_val
+        except (ValueError, TypeError):
+            pass
+    
+    # 检查模型是否存在
+    if "job_model" in job_dict and job_dict["job_model"] is not None:
+        job_model = job_dict["job_model"]
+        
+        # 检查模型是否有 tput 矩阵
+        if hasattr(job_model, "tput") and job_model.tput is not None:
+            # 使用传入的值或字典中的值
+            cpu = cpu_allocated if cpu_allocated is not None else job_dict.get("cpus", 0)
+            mem = mem_allocated if mem_allocated is not None else job_dict.get("mem", 0)
+            
+            # CPU 和内存值映射（与 Job 类中的定义一致）
+            cpu_val = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 9, 7: 12, 8: 24}
+            mem_val = {0: 62.5, 1: 125, 2: 187.5, 3: 250}
+            
+            # 找到对应的索引
+            def get_idx(id_map, value):
+                for k, v in id_map.items():
+                    if value == v:
+                        return k
+                return None
+            
+            cpu_idx = get_idx(cpu_val, cpu)
+            mem_idx = get_idx(mem_val, mem)
+            
+            if cpu_idx is not None and mem_idx is not None:
+                # 从 tput 矩阵中获取值
+                try:
+                    tput_matrix = job_model.tput
+                    if isinstance(tput_matrix, np.ndarray):
+                        # 确保索引在有效范围内
+                        if cpu_idx < tput_matrix.shape[0] and mem_idx < tput_matrix.shape[1]:
+                            return float(tput_matrix[cpu_idx, mem_idx])
+                except Exception as e:
+                    logging.warning(f"Error getting tput from matrix: {e}")
+    
+    # 如果无法从模型获取，使用 synergy_speedup 作为替代
+    if "synergy_speedup" in job_dict and job_dict["synergy_speedup"] is not None:
+        try:
+            speedup = float(job_dict["synergy_speedup"])
+            if speedup > 0:
+                return speedup
+        except (ValueError, TypeError):
+            pass
+    
+    # 默认返回 1.0
+    return 1.0
 
 
 class ResourceManagerComm(object):
@@ -262,7 +332,7 @@ class ResourceManagerComm(object):
                     active_job_dict[job_id]["job_launched_first_time"] = False
 
                 active_job_dict[job_id]["previously_launched"] = True
-
+                job=active_job_dict[job_id]
                 # 获取 GPU 数量（数值）
                 num_gpus = active_job_dict[job_id]["num_GPUs"]
                 # print("job_id",job_id)
@@ -281,17 +351,19 @@ class ResourceManagerComm(object):
                     continue
 
                 total_iterations_in_round = (
-                    round_duration / active_job_dict[job_id]["job_iteration_time"]
+                    round_duration / job["job_iteration_time"]
                 ) ##计算本轮能完成多少迭代
                 
                 # attained_service 应该考虑 GPU 数量：如果有 N 个 GPU，每轮累加 round_duration * N
                 # 这与 attained_service_scheduler 的计算方式一致
+                # 获取 tput（从字典形式的 job 中）
+                tput = get_tput_from_job_dict(job, job.get("cpus", 0), job.get("mem", 0))
                 attained_service = (
                     active_job_dict[job_id]["tracked_metrics"]["attained_service"]
-                    + round_duration * num_gpus
+                    + round_duration * num_gpus * tput
                 )
 
-                per_iteration_time = active_job_dict[job_id]["job_iteration_time"]
+                per_iteration_time = job["job_iteration_time"]
 
                 # total_iteration_achieved = (
                 #     total_iterations_in_round
@@ -300,24 +372,14 @@ class ResourceManagerComm(object):
                 num_gpus = active_job_dict[job_id]["num_GPUs"]
                 # print("num_gpus",num_gpus)
                 if num_gpus != "0":
-                    scale_factor = self.optimus_scale_by_gpus.get(num_gpus)
                     total_iteration_achieved = (
-                        total_iterations_in_round * num_gpus
+                        total_iterations_in_round * num_gpus * tput
                         + active_job_dict[job_id]["job_executed_iteration"]
                     )
                 else:
                     total_iteration_achieved = active_job_dict[job_id]["job_executed_iteration"]
                 
                 # print("gpu",self.optimus_scale_by_gpus[str(active_job_dict[job_id]["job_gpu_demand"])])
-                ##added for Pollux
-                if os.environ["sched_policy"] == "Pollux":
-                    if active_job_dict[job_id]["tracked_metrics"]["pollux_metrics"].completion_time is not None:
-                        job_exit = True
-                elif (
-                    total_iteration_achieved
-                    >= active_job_dict[job_id]["job_total_iteration"]
-                ):
-                    job_exit = True
 
                 # CAUTION: In place update
                 # TODO: Clean this part of update

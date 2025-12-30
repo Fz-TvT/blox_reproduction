@@ -144,9 +144,17 @@ class Job:
             self.res_map = res_map
         elif res_map is not None:
             self.res_map = nested_add(self.res_map, res_map)
-        else:
-            # Empry res_map passed in
-            raise ValueError("Empty resource allocation map for job {}".format(self.job_id))
+        elif res_map is None and not bool(self.res_map):
+            # If res_map is None and job doesn't have one, create an empty one
+            # This allows compatibility when res_map is not provided
+            # In simulation mode, res_map should be provided for proper resource tracking
+            if simulate:
+                # In simulation, try to create a basic res_map from gpus if possible
+                # This is a fallback - ideally res_map should be provided by placement
+                self.res_map = {}
+            else:
+                # In non-simulation mode, allow empty res_map
+                self.res_map = {}
 
         self.update_res()           
         #self.update_utilization()
@@ -442,6 +450,49 @@ class Job:
             #self.logger.info("Job Finished - {}/{}".format(self.job_executed_iteration,self.job_total_iteration))
             return True
         return False
+
+    def get_tput_from_allocation(self, cpu_allocated=None, mem_allocated=None):
+        """
+        根据当前分配的 CPU 和内存获取对应的 tput
+        
+        Args:
+            cpu_allocated: 分配的 CPU 数量（如果为 None，使用 self.cpus）
+            mem_allocated: 分配的内存数量（如果为 None，使用 self.mem）
+        
+        Returns:
+            tput 值（float），如果无法获取则返回 None
+        """
+        # 检查模型是否存在
+        if self.job_model is None:
+            return None
+        
+        # 检查模型是否有 tput 矩阵
+        if self.job_model.tput is None:
+            return None
+        
+        # 使用传入的值或当前分配的值
+        cpu = cpu_allocated 
+        mem = mem_allocated 
+        
+        cpu_idx = self.get_idx(self.cpu_val, cpu)
+        # 找到最接近的内存索引
+        mem_idx = self.get_idx(self.mem_val, mem)
+
+        # 从 tput 矩阵中获取值
+        try:
+            import numpy as np
+            tput_matrix = self.job_model.tput
+            if isinstance(tput_matrix, np.ndarray):
+                # 确保索引在有效范围内
+                if cpu_idx < tput_matrix.shape[0] and mem_idx < tput_matrix.shape[1]:
+                    tput_value = float(tput_matrix[cpu_idx, mem_idx])
+                    # 更新 job 的 tput 属性
+                    self.tput = tput_value
+                    return tput_value
+        except Exception as e:
+            self.logger.warning(f"Error getting tput from matrix: {e}")
+        
+        return None
 
     def prefers_consolidation(self):
         if self.job_gpu_demand > 1:

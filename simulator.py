@@ -37,7 +37,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         schedulers,
         placement_policies,
         acceptance_policies,
-        model_class_split=(34, 33, 33),
+        model_class_split=(30, 40, 30),
         ipaddr_resource_manager="localhost",
         exponential=True,
         multigpu=False,
@@ -45,11 +45,11 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         placement=True,
         prioritize=False,
         round_duration=300,
-        number_of_machines=10,
-        gpus_per_machine=10,
-        memory_per_machine=16,
+        number_of_machines=4,
+        gpus_per_machine=8,
+        memory_per_machine=500,
         is_numa_available=False,
-        num_cpu_cores=32,
+        num_cpu_cores=24,
         num_jobs_default=0,
         exp_prefix="test",
     ):
@@ -249,17 +249,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
                 plot_y_val = list()
                 for idx, val in enumerate(vals):
                     plot_y_val.append(float(idx) / len(vals))
-                # write_folder = f"./plots/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_{scheduler}_load_{load}"
-                # fig, ax1 = plt.subplots(1, 1)
-                # fig.set_size_inches(10, 3)
-                # ax1.set_xscale("log")
-                # ax1.set_xlabel("Time(hrs)") # 根据你的数据性质设置合适的x轴标签
-                # ax1.set_ylabel("CDF") # 根据你的数据性质设置合适的y轴标签
-                # ax1.set_title(f"{scheduler}_load_{load}_cdf")
-                # ax1.set_xticks(vals[::20])        
                 ax1.plot(vals, plot_y_val,label=scheduler)
-                # ax1.legend()
-            # ax1.set_xscale("log")
             ax1.set_xlabel("Time(hrs)") # 根据你的数据性质设置合适的x轴标签
             ax1.set_ylabel("CDF") # 根据你的数据性质设置合适的y轴标签
             ax1.set_title(f"{scheduler}_load_{load}_cdf")
@@ -334,23 +324,6 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
                 )
                 plt.close()            
 
-            # write_folder = f"./plots/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_load_{load}"
-            # if not os.path.exists(write_folder):
-            #         os.makedirs(write_folder)
-            # fig1.savefig(
-            #     os.path.join(write_folder, f"load_{load}_gpu_demand.pdf"),
-            #     format="pdf",
-            #     dpi=600,
-            #     bbox_inches="tight",
-            # )
-            # plt.close(fig1)
-            # fig2.savefig(
-            #     os.path.join(write_folder, f"load_{load}_free_gpu.pdf"),
-            #     format="pdf",
-            #     dpi=600,
-            #     bbox_inches="tight",
-            # )
-            # plt.close(fig2)
 
     def _clean_sim_job(self, new_job: dict) -> dict:
         """
@@ -518,11 +491,11 @@ def launch_server(args) -> grpc.Server:
             [
                 # "Tiresias",
                 # "Optimus",
-                # "Fifo",
+                "Fifo",
                 # "Las",
-                "Srtf",
+                # "Srtf",
                 # "New",
-                # "Syngery"
+                "Synergy_fifo"
             ],
             ["Place"],
             ["AcceptAll"],
