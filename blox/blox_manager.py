@@ -238,12 +238,21 @@ class BloxManager(object):
         for jid in job_state.active_jobs:
             gpu_demand += job_state.active_jobs[jid]["num_GPUs"]
 
+        # Get cluster resource usage statistics
+        resource_usage = get_cluster_resource_usage(cluster_state)
+        
         cluster_state.cluster_stats[cluster_state.time] = {
             "total_jobs": total_jobs,
             "jobs_in_queue": jobs_in_queue,
             "jobs_running": jobs_running,
             "free_gpus": free_gpus,
             "gpu_demand": gpu_demand,
+            "cpu_used": resource_usage["total_cpu_used"],
+            "cpu_capacity": resource_usage["total_cpu_capacity"],
+            "cpu_utilization_percent": resource_usage["cpu_utilization_percent"],
+            "memory_used": resource_usage["total_memory_used"],
+            "memory_capacity": resource_usage["total_memory_capacity"],
+            "memory_utilization_percent": resource_usage["memory_utilization_percent"],
         }
 
         #
@@ -380,6 +389,8 @@ class BloxManager(object):
             # mark corresponding GPUs on which the jobs are running as
             # available
             _free_gpu_by_jobid(jid, cluster_state.gpu_df)
+            # Free CPU and memory resources for this job
+            _free_server_resources_by_jobid(jid, active_jobs.active_jobs, cluster_state)
 
         self.comm_node_manager.terminate_jobs(
             terminate_list_id,
@@ -410,6 +421,10 @@ class BloxManager(object):
             if "suspended" in active_jobs.active_jobs[jid]:
                 active_jobs.active_jobs[jid]["suspended"] = 0
             _mark_gpu_in_use_by_gpu_id(gpus_to_launch, jid, cluster_state.gpu_df)
+            # Update CPU and memory usage for this job
+            res_map = active_jobs.active_jobs[jid].get("res_map", {})
+            if res_map:
+                _update_server_resource_usage(jid, res_map, cluster_state, operation="add")
             return True
 
         # for jid in jobs_to_launch:
@@ -516,6 +531,114 @@ def _mark_gpu_in_use_by_gpu_id(
         True,
     )
     return None
+
+
+def _update_server_resource_usage(
+    job_id: int,
+    res_map: dict,
+    cluster_state,
+    operation: str = "add"
+) -> None:
+    """
+    Update CPU and memory usage on servers based on job's res_map
+    Args:
+        job_id: Job ID
+        res_map: Resource map from placement (format: {ServerWrapper: {'cpu': int, 'mem': float, ...}})
+        cluster_state: ClusterState object
+        operation: "add" to allocate resources, "remove" to free resources
+    """
+    if not res_map:
+        return
+    
+    multiplier = 1 if operation == "add" else -1
+    
+    for server_key, resources in res_map.items():
+        # Handle both ServerWrapper objects and node_id integers
+        if hasattr(server_key, 'node_id'):
+            node_id = server_key.node_id
+        elif isinstance(server_key, int):
+            node_id = server_key
+        else:
+            # Try to get node_id from server_map_entry if it's a dict-like object
+            try:
+                node_id = server_key.get('node_id', None) if hasattr(server_key, 'get') else None
+            except:
+                continue
+        
+        if node_id is None or node_id not in cluster_state.server_resource_usage:
+            continue
+            
+        cpu_alloc = resources.get('cpu', 0) if isinstance(resources, dict) else 0
+        mem_alloc = resources.get('mem', 0) if isinstance(resources, dict) else 0
+        
+        cluster_state.server_resource_usage[node_id]["cpu_used"] += cpu_alloc * multiplier
+        cluster_state.server_resource_usage[node_id]["memory_used"] += mem_alloc * multiplier
+        
+        # Ensure non-negative
+        cluster_state.server_resource_usage[node_id]["cpu_used"] = max(
+            0, cluster_state.server_resource_usage[node_id]["cpu_used"]
+        )
+        cluster_state.server_resource_usage[node_id]["memory_used"] = max(
+            0, cluster_state.server_resource_usage[node_id]["memory_used"]
+        )
+
+
+def _free_server_resources_by_jobid(
+    job_id: int,
+    active_jobs: dict,
+    cluster_state
+) -> None:
+    """
+    Free CPU and memory resources for a terminated job
+    Args:
+        job_id: Job ID to free resources for
+        active_jobs: Active jobs dictionary
+        cluster_state: ClusterState object
+    """
+    if job_id not in active_jobs:
+        return
+    
+    job = active_jobs[job_id]
+    res_map = job.get("res_map", {})
+    
+    if res_map:
+        _update_server_resource_usage(job_id, res_map, cluster_state, operation="remove")
+
+
+def get_cluster_resource_usage(cluster_state) -> dict:
+    """
+    Get cluster-wide CPU and memory usage statistics
+    Args:
+        cluster_state: ClusterState object
+    Returns:
+        Dictionary with cluster-wide resource usage statistics
+    """
+    total_cpu_used = 0.0
+    total_memory_used = 0.0
+    total_cpu_capacity = 0
+    total_memory_capacity = 0
+    
+    for node_id, usage in cluster_state.server_resource_usage.items():
+        total_cpu_used += usage["cpu_used"]
+        total_memory_used += usage["memory_used"]
+        
+        if node_id in cluster_state.server_map:
+            node_info = cluster_state.server_map[node_id]
+            total_cpu_capacity += node_info.get("numCPUcores", 0)
+            total_memory_capacity += node_info.get("memoryCapacity", 0)
+    
+    cpu_utilization = (total_cpu_used / total_cpu_capacity * 100) if total_cpu_capacity > 0 else 0
+    memory_utilization = (total_memory_used / total_memory_capacity * 100) if total_memory_capacity > 0 else 0
+    
+    return {
+        "total_cpu_used": total_cpu_used,
+        "total_memory_used": total_memory_used,
+        "total_cpu_capacity": total_cpu_capacity,
+        "total_memory_capacity": total_memory_capacity,
+        "cpu_utilization_percent": cpu_utilization,
+        "memory_utilization_percent": memory_utilization,
+        "per_server_usage": cluster_state.server_resource_usage.copy()
+    }
 
 
 def _find_local_gpu_id(global_gpu_ids: List[int], gpu_df: pd.DataFrame) -> List[int]:

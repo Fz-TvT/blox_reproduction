@@ -47,6 +47,9 @@ class ClusterState(object):
         self.time = 0
         self.cluster_stats = dict()
         self.allocations = dict() # added for Pollux
+        # Track CPU and memory usage per server
+        # Format: {node_id: {"cpu_used": float, "memory_used": float}}
+        self.server_resource_usage = dict()
     # def get_new_nodes(self):
     # """
     # Fetch any new nodes which have arrived at the scheduler
@@ -64,6 +67,11 @@ class ClusterState(object):
             try:
                 node_info = new_nodes.pop(0)
                 self.server_map[self.node_counter] = node_info
+                # Initialize resource usage tracking for this server
+                self.server_resource_usage[self.node_counter] = {
+                    "cpu_used": 0.0,
+                    "memory_used": 0.0
+                }
                 numGPUs_on_node = node_info["numGPUs"]
                 gpu_uuid_list = node_info["gpuUUIDs"].split("\n")
                 assert (
