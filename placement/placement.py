@@ -123,6 +123,8 @@ class JobPlacement(object):
                 # Define allocation callback function
                 def _call_allocate(available_gpus_dict, gpu_deficit, job_info_dict, time=None, fair=False, demand_vec=None):
                     """Callback function for _tune to attempt allocation"""
+                    nonlocal server_resource_usage  # Declare nonlocal before using
+                    
                     if demand_vec is None:
                         demand_vec = [gpu_deficit, 0, 0, 0]
                     
@@ -137,7 +139,6 @@ class JobPlacement(object):
                     )
                     
                     # Update server_resource_usage from returned value
-                    nonlocal server_resource_usage
                     if found and updated_server_resource_usage:
                         server_resource_usage = updated_server_resource_usage
                     
@@ -178,6 +179,39 @@ class JobPlacement(object):
             return (jobs_to_terminate, job_to_launch)
             
         else:
+            # Initialize server resource usage for other schedulers
+            server_resource_usage = {}
+            if cluster_state and hasattr(cluster_state, 'server_resource_usage'):
+                # Use cluster_state.server_resource_usage as base
+                for node_id in node_info:
+                    if node_id in cluster_state.server_resource_usage:
+                        # Get capacity from node_info
+                        cpu_capacity = node_info[node_id].get("numCPUcores", 0)
+                        mem_capacity = node_info[node_id].get("memoryCapacity", 0)
+                        gpu_capacity = node_info[node_id].get("numGPUs", 0)
+                        
+                        # Get used resources from cluster_state
+                        cpu_used = cluster_state.server_resource_usage[node_id].get("cpu_used", 0)
+                        mem_used = cluster_state.server_resource_usage[node_id].get("memory_used", 0)
+                        
+                        # Calculate available resources
+                        server_resource_usage[node_id] = {
+                            "gpu": gpu_capacity - len(gpu_df.loc[(gpu_df["Node_ID"] == node_id) & (gpu_df["IN_USE"] == True)]),
+                            "cpu": max(0, cpu_capacity - cpu_used),
+                            "memory": max(0, mem_capacity - mem_used)
+                        }
+                    else:
+                        # Fallback to calculation if node not in cluster_state
+                        server_resource_usage[node_id] = get_server_available_resources(
+                            node_id, node_info[node_id], gpu_df, active_jobs
+                        )
+            else:
+                # Fallback: calculate from scratch if cluster_state not available
+                for node_id in node_info:
+                    server_resource_usage[node_id] = get_server_available_resources(
+                        node_id, node_info[node_id], gpu_df, active_jobs
+                    )
+            
             running_jobs = 0
             new_scheduled_jobs = 0
             jobs_to_schedule = 0
@@ -200,62 +234,88 @@ class JobPlacement(object):
                         placement, found = self._consolidated_placement(job, free_gpus)
                     else:
                         placement, found = self._scattered_placement(job, free_gpus)
-                    # next checking if there are lower priority jobs which have
-                    if not found:
-                        # no free GPUs
-                        # need to see if there are lower priority jobs which can be
-                        # terminated and placement can be found then
-                        for rev_idx in range(1, len(active_jobs) - idx):
-                            potential_job_to_terminate = active_jobs[
-                                job_order[-rev_idx][0]
-                            ]
-                            if potential_job_to_terminate["is_running"] == True:
-                                # terminate this job
-                                jobs_to_terminate.append(job_order[-rev_idx][0])
-                                potential_job_to_terminate["is_running"] = False
-                                # freeing up GPUs
-                                delete_job_by_id(gpu_df, job_order[-rev_idx][0])
-                                free_gpus = find_free_GPUs(gpu_df)
-                                if place_consolidated:
-                                    placement, found = self._consolidated_placement(
-                                        job, free_gpus
-                                    )
-                                else:
-                                    placement, found = self._scattered_placement(
-                                        job, free_gpus
-                                    )
-                                if found:
-                                    # we found an assignment
-                                    # print(
-                                    # f"Placed {job_id} by determining to terminate{job_order[-rev_idx][0]}"
-                                    # )
-                                    break
+                    
+                    # If GPU placement found, check if CPU and memory resources are available
+                    if found:
+                        # Calculate required CPU and memory based on actual GPU allocation
+                        # CPU: 3 cores per GPU, Memory: 62.5 GB per GPU
+                        actual_gpu_count = len(placement)
+                        required_cpu_per_gpu = 3
+                        required_mem_per_gpu = 62.5
+                        
+                        # Group GPUs by node_id to check resources per server
+                        node_gpu_count = {}
+                        for gpu_id in placement:
+                            node_id = gpu_df.loc[gpu_df["GPU_ID"] == gpu_id, "Node_ID"].iloc[0]
+                            node_gpu_count[node_id] = node_gpu_count.get(node_id, 0) + 1
+                        
+                        # Check if all servers have enough CPU and memory
+                        resources_sufficient = True
+                        for node_id, gpu_count in node_gpu_count.items():
+                            required_cpu = gpu_count * required_cpu_per_gpu
+                            required_mem = gpu_count * required_mem_per_gpu
+                            
+                            available = server_resource_usage.get(node_id, {})
+                            available_cpu = available.get("cpu", 0)
+                            available_mem = available.get("memory", 0)
+                            
+                            if available_cpu < required_cpu or available_mem < required_mem:
+                                resources_sufficient = False
+                                break
+                        
+                        if not resources_sufficient:
+                            # Not enough CPU or memory resources, wait for next round
+                            found = False
+                    
                 if found:
                     new_scheduled_jobs += 1
                     job_to_launch[job_id] = placement
                     
                     # Create res_map for CPU and memory proportional allocation
-                    # Get job resource demands (use original demands if available)
-                    gpu_demand = job.get("job_gpu_demand", job.get("num_GPUs", len(placement)))
+                    # Get actual GPU count from placement
+                    actual_gpu_count = len(placement)
                     sspeed_demand = job.get("job_sspeed_demand_orig", job.get("job_sspeed_demand", 0))
                     
-                    # If CPU/memory demands are not set, use default proportional allocation
-                    # Default: assume 3 CPU cores and 62.5 GB memory per GPU (common defaults)
-                    cpu_demand = gpu_demand * 3  # Default: 3 CPU cores per GPU
-                    mem_demand = gpu_demand * 62.5  # Default: 62.5 GB memory per GPU 
+                    # Calculate CPU and memory based on actual GPU allocation
+                    # CPU: 3 cores per GPU, Memory: 62.5 GB per GPU
+                    cpu_demand = actual_gpu_count * 3  # 3 CPU cores per GPU
+                    mem_demand = actual_gpu_count * 62.5  # 62.5 GB memory per GPU
+                    
                     # Create res_map from GPU placement
-                    # This will proportionally allocate CPU and memory based on GPU allocation
+                    # This will proportionally allocate CPU and memory based on GPU allocation across servers
                     res_map = create_res_map_from_placement(
                         placement, gpu_df, node_info,
-                        gpu_demand, cpu_demand, mem_demand, sspeed_demand
+                        actual_gpu_count, cpu_demand, mem_demand, sspeed_demand
                     )
+                    
+                    # Update server_resource_usage to reflect allocated resources
+                    for server_key, resources in res_map.items():
+                        if hasattr(server_key, 'node_id'):
+                            serv_id = server_key.node_id
+                        elif isinstance(server_key, int):
+                            serv_id = server_key
+                        else:
+                            continue
+                        
+                        if serv_id in server_resource_usage:
+                            server_resource_usage[serv_id]["cpu"] -= resources.get("cpu", 0)
+                            server_resource_usage[serv_id]["memory"] -= resources.get("mem", 0)
+                            server_resource_usage[serv_id]["gpu"] -= resources.get("gpu", 0)
                     
                     # Store res_map in active_jobs for later use by job.allocate()
                     active_jobs[job_id]["res_map"] = res_map
                     
+                    # Update job state with allocated resources
+                    active_jobs[job_id]["num_GPUs"] = actual_gpu_count
+                    active_jobs[job_id]["cpus"] = sum(r.get("cpu", 0) for r in res_map.values())
+                    active_jobs[job_id]["mem"] = sum(r.get("mem", 0) for r in res_map.values())
+                    active_jobs[job_id]["sspeed"] = sum(r.get("sspeed", 0) for r in res_map.values())
+                    
                     # update manual-pipeline-list for bert and gpt
                     mark_gpu_in_use(gpu_df, placement, job_id)
                 else:
+                    # Cannot place this job (either no GPUs or insufficient CPU/memory)
+                    # Wait for next round - don't terminate other jobs
                     break
             return (jobs_to_terminate, job_to_launch)
 
@@ -932,81 +992,6 @@ class JobPlacement(object):
         
         return ([], False, {})
 
-    # Pandas Utilities
-    def find_gpus_matching_JobID(job_id: int, gpu_df: pd.DataFrame) -> list:
-        """
-        Finds the GPU IDs which are running the given job id
-        """
-        return gpu_df.loc[gpu_df["JOB_IDS"] == job_id]["GPU_ID"].tolist()
-
-
-    # Find free GPUs
-    def find_free_GPUs(gpu_df: pd.DataFrame) -> dict:
-        """
-        Find the nodeID's which have free GPUs
-        Args:
-        gpu_df : DataFrame consisting of information about GPUs
-        Returns:
-        dict: {Node_ID: [list of free GPUs]}
-        """
-        return (
-            gpu_df.loc[gpu_df["IN_USE"] == False]
-            .groupby("Node_ID")["GPU_ID"]
-            .apply(list)
-            .to_dict()
-        )
-
-
-    def find_free_GPUs_by_type(gpu_df: pd.DataFrame, gpu_type: str) -> dict:
-        """
-        Find free nodeID's which have free GPUs of specific type
-
-        Args:
-        gpu_df : DataFrame consiting the information about GPUs
-        Returns:
-        dict : {Node_ID : [list of free GPUs]}
-        """
-        return (
-            gpu_df.loc[(gpu_df["IN_USE"] == False) & (gpu_df["GPU_type"] == gpu_type)]
-            .groupby("Node_ID")["GPU_ID"]
-            .apply(list)
-            .to_dict()
-        )
-
-
-    # Mark a GPU in use
-    def mark_gpu_in_use(gpu_df: pd.DataFrame, gpu_id: List[int], job_id: int) -> None:
-        """
-        Find the GPU ID and mark it in use. After deciding to schedule something on
-        it.
-        Args:
-        gpu_df : DataFrame consisting of information about GPUs
-        gpu_id : GPU to mark busy
-        job_id: Job being scheduled on GPU with id=gpu_id
-
-        Returns:
-        None
-        In place modifies the gpu_df
-        """
-        gpu_df.loc[gpu_df["GPU_ID"].isin(gpu_id), ["JOB_IDS", "IN_USE"]] = job_id, True
-        return None
-
-
-    # Delete Job from data frame
-    def delete_job_by_id(gpu_df: pd.DataFrame, job_id: int) -> None:
-        """
-        Finds the job ID provided. Marks those jobs free and marks the GPU free to
-        Args:
-        gpu_df : DataFrame consisting of information about GPUs
-        job_id : Job to delete
-
-        Returns:
-        None
-        In place modifies the gpu_df
-        """
-        gpu_df.loc[gpu_df["JOB_IDS"] == job_id, ["JOB_IDS", "IN_USE"]] = None, False
-        return None
-
 
     def _consolidated_placement(
         self, job_param: dict, free_gpus: dict
@@ -1067,182 +1052,259 @@ class JobPlacement(object):
         else:
             return ([], False)
 
-    class ServerWrapper:
-        """
-        Simple wrapper class to represent a server for res_map
-        """
-        def __init__(self, node_id: int):
-            self.server_id = node_id
-            self.node_id = node_id
-        
-        def __hash__(self):
-            return hash(self.server_id)
-        
-        def __eq__(self, other):
-            if isinstance(other, ServerWrapper):
-                return self.server_id == other.server_id
-            return False
+    # Pandas Utilities
+
+def find_gpus_matching_JobID(job_id: int, gpu_df: pd.DataFrame) -> list:
+    """
+    Finds the GPU IDs which are running the given job id
+    """
+    return gpu_df.loc[gpu_df["JOB_IDS"] == job_id]["GPU_ID"].tolist()
 
 
-    def create_res_map_from_placement(
-        placement: List[int], 
-        gpu_df: pd.DataFrame, 
-        node_info: Dict[int, Dict],
-        gpu_demand: int,
-        cpu_demand: float,
-        mem_demand: float,
-        sspeed_demand: float = 0.0
-    ) -> Dict[Any, Dict[str, Any]]:
-        """
-        Create res_map from GPU placement list
-        Args:
-            placement: List of GPU IDs allocated to the job
-            gpu_df: GPU dataframe
-            node_info: Server information dictionary
-            gpu_demand: Total GPU demand for the job
-            cpu_demand: Total CPU demand for the job
-            mem_demand: Total memory demand for the job
-            sspeed_demand: Total storage speed demand for the job
-        Returns:
-            res_map: Dictionary mapping server objects to resource allocations
-        """
-        res_map = {}
-        
-        if not placement:
-            return res_map
-        
-        # Group GPUs by node_id
-        node_gpu_count = {}
-        for gpu_id in placement:
-            node_id = gpu_df.loc[gpu_df["GPU_ID"] == gpu_id, "Node_ID"].iloc[0]
-            node_gpu_count[node_id] = node_gpu_count.get(node_id, 0) + 1
-        
-        # Calculate resources per server
-        # Use a list to track allocations and ensure total doesn't exceed demand
-        server_list = []
-        total_cpu_allocated = 0
-        
-        for node_id, gpu_count in node_gpu_count.items():
-            # Create server wrapper
-            server = ServerWrapper(node_id)
-            
-            # Calculate proportional resources for this server
-            gpu_ratio = gpu_count / gpu_demand if gpu_demand > 0 else 0
-            # Use floor to ensure we don't exceed demand, then adjust last server
-            cpu_alloc = int(cpu_demand * gpu_ratio)  # Floor division
-            mem_alloc = mem_demand * gpu_ratio
-            sspeed_alloc = sspeed_demand * gpu_ratio
-            
-            server_list.append({
-                'server': server,
-                'gpu_count': gpu_count,
-                'cpu_alloc': cpu_alloc,
-                'mem_alloc': mem_alloc,
-                'sspeed_alloc': sspeed_alloc
-            })
-            
-            total_cpu_allocated += cpu_alloc
-        
-        # Adjust for rounding errors: add remainder to last server
-        # This ensures total equals demand without exceeding it
-        cpu_diff = int(cpu_demand) - total_cpu_allocated
-        if cpu_diff > 0 and server_list:
-            # Add remainder to last server (ensures total = demand, not exceeding)
-            server_list[-1]['cpu_alloc'] += cpu_diff
-        
-        # Build res_map from allocations
-        for item in server_list:
-            res_map[item['server']] = {
-                'gpu': item['gpu_count'],
-                'cpu': item['cpu_alloc'],
-                'mem': item['mem_alloc'],
-                'sspeed': item['sspeed_alloc']
-            }
-        
+    # Find free GPUs
+
+def find_free_GPUs(gpu_df: pd.DataFrame) -> dict:
+    """
+    Find the nodeID's which have free GPUs
+    Args:
+    gpu_df : DataFrame consisting of information about GPUs
+    Returns:
+    dict: {Node_ID: [list of free GPUs]}
+    """
+    return (
+        gpu_df.loc[gpu_df["IN_USE"] == False]
+        .groupby("Node_ID")["GPU_ID"]
+        .apply(list)
+        .to_dict()
+    )
+
+
+def find_free_GPUs_by_type(gpu_df: pd.DataFrame, gpu_type: str) -> dict:
+    """
+    Find free nodeID's which have free GPUs of specific type
+
+    Args:
+    gpu_df : DataFrame consiting the information about GPUs
+    Returns:
+    dict : {Node_ID : [list of free GPUs]}
+    """
+    return (
+        gpu_df.loc[(gpu_df["IN_USE"] == False) & (gpu_df["GPU_type"] == gpu_type)]
+        .groupby("Node_ID")["GPU_ID"]
+        .apply(list)
+        .to_dict()
+    )
+
+
+# Mark a GPU in use
+def mark_gpu_in_use(gpu_df: pd.DataFrame, gpu_id: List[int], job_id: int) -> None:
+    """
+    Find the GPU ID and mark it in use. After deciding to schedule something on
+    it.
+    Args:
+    gpu_df : DataFrame consisting of information about GPUs
+    gpu_id : GPU to mark busy
+    job_id: Job being scheduled on GPU with id=gpu_id
+
+    Returns:
+    None
+    In place modifies the gpu_df
+    """
+    gpu_df.loc[gpu_df["GPU_ID"].isin(gpu_id), ["JOB_IDS", "IN_USE"]] = job_id, True
+    return None
+
+
+# Delete Job from data frame
+def delete_job_by_id(gpu_df: pd.DataFrame, job_id: int) -> None:
+    """
+    Finds the job ID provided. Marks those jobs free and marks the GPU free to
+    Args:
+    gpu_df : DataFrame consisting of information about GPUs
+    job_id : Job to delete
+
+    Returns:
+    None
+    In place modifies the gpu_df
+    """
+    gpu_df.loc[gpu_df["JOB_IDS"] == job_id, ["JOB_IDS", "IN_USE"]] = None, False
+    return None
+
+class ServerWrapper:
+    """
+    Simple wrapper class to represent a server for res_map
+    """
+    def __init__(self, node_id: int):
+        self.server_id = node_id
+        self.node_id = node_id
+    
+    def __hash__(self):
+        return hash(self.server_id)
+    
+    def __eq__(self, other):
+        if isinstance(other, ServerWrapper):
+            return self.server_id == other.server_id
+        return False
+
+
+def create_res_map_from_placement(
+    placement: List[int], 
+    gpu_df: pd.DataFrame, 
+    node_info: Dict[int, Dict],
+    gpu_demand: int,
+    cpu_demand: float,
+    mem_demand: float,
+    sspeed_demand: float = 0.0
+) -> Dict[Any, Dict[str, Any]]:
+    """
+    Create res_map from GPU placement list
+    Args:
+        placement: List of GPU IDs allocated to the job
+        gpu_df: GPU dataframe
+        node_info: Server information dictionary
+        gpu_demand: Total GPU demand for the job
+        cpu_demand: Total CPU demand for the job
+        mem_demand: Total memory demand for the job
+        sspeed_demand: Total storage speed demand for the job
+    Returns:
+        res_map: Dictionary mapping server objects to resource allocations
+    """
+    res_map = {}
+    
+    if not placement:
         return res_map
-
-
-    def find_num_free_GPUs(gpu_df: pd.DataFrame) -> int:
-        """
-        Find the number of free GPU's
-        Args:
-        gpu_df : DataFrame consisting of information about GPUs
-        Returns:
-        int : Number of free GPUs
-        """
-        return len(gpu_df.loc[gpu_df["IN_USE"] == False])
-
-
-    def get_server_available_resources(
-        node_id: int, node_info: dict, gpu_df: pd.DataFrame, active_jobs: dict
-    ) -> dict:
-        """
-        Calculate available resources on a server
-        Args:
-            node_id: Server node ID
-            node_info: Server information dict
-            gpu_df: GPU dataframe
-            active_jobs: Active jobs dictionary
-        Returns:
-            dict with keys: 'gpu', 'cpu', 'memory'
-        """
-        # Get server capacity
-        server_capacity = {
-            "gpu": node_info.get("numGPUs", 0),
-            "cpu": node_info.get("numCPUcores", 0),
-            "memory": node_info.get("memoryCapacity", 0),
+    
+    # Group GPUs by node_id
+    node_gpu_count = {}
+    for gpu_id in placement:
+        node_id = gpu_df.loc[gpu_df["GPU_ID"] == gpu_id, "Node_ID"].iloc[0]
+        node_gpu_count[node_id] = node_gpu_count.get(node_id, 0) + 1
+    
+    # Calculate resources per server
+    # Use a list to track allocations and ensure total doesn't exceed demand
+    server_list = []
+    total_cpu_allocated = 0
+    
+    for node_id, gpu_count in node_gpu_count.items():
+        # Create server wrapper
+        server = ServerWrapper(node_id)
+        
+        # Calculate proportional resources for this server
+        gpu_ratio = gpu_count / gpu_demand if gpu_demand > 0 else 0
+        # Use floor to ensure we don't exceed demand, then adjust last server
+        cpu_alloc = int(cpu_demand * gpu_ratio)  # Floor division
+        mem_alloc = mem_demand * gpu_ratio
+        sspeed_alloc = sspeed_demand * gpu_ratio
+        
+        server_list.append({
+            'server': server,
+            'gpu_count': gpu_count,
+            'cpu_alloc': cpu_alloc,
+            'mem_alloc': mem_alloc,
+            'sspeed_alloc': sspeed_alloc
+        })
+        
+        total_cpu_allocated += cpu_alloc
+    
+    # Adjust for rounding errors: add remainder to last server
+    # This ensures total equals demand without exceeding it
+    cpu_diff = int(cpu_demand) - total_cpu_allocated
+    if cpu_diff > 0 and server_list:
+        # Add remainder to last server (ensures total = demand, not exceeding)
+        server_list[-1]['cpu_alloc'] += cpu_diff
+    
+    # Build res_map from allocations
+    for item in server_list:
+        res_map[item['server']] = {
+            'gpu': item['gpu_count'],
+            'cpu': item['cpu_alloc'],
+            'mem': item['mem_alloc'],
+            'sspeed': item['sspeed_alloc']
         }
-        
-        # Calculate used resources
-        used_resources = {"gpu": 0, "cpu": 0, "memory": 0}
-        
-        # Count used GPUs on this node
-        node_gpus = gpu_df.loc[gpu_df["Node_ID"] == node_id]
-        used_resources["gpu"] = len(node_gpus.loc[node_gpus["IN_USE"] == True])
-        
-        # Calculate used CPU and memory from running jobs on this node
-        running_job_ids = node_gpus.loc[node_gpus["IN_USE"] == True]["JOB_IDS"].unique()
-        for job_id in running_job_ids:
-            if job_id is not None and job_id in active_jobs:
-                job = active_jobs[job_id]
-                # Get allocated resources for this job on this node
-                # Note: This is a simplified calculation
-                # In reality, we need to track per-node resource allocation
-                if job.get("is_running", False):
-                    # Estimate based on job's GPU allocation on this node
-                    job_gpus_on_node = len(node_gpus.loc[
-                        (node_gpus["IN_USE"] == True) & (node_gpus["JOB_IDS"] == job_id)
-                    ])
-                    if job_gpus_on_node > 0:
-                        # Proportional allocation
-                        total_job_gpus = job.get("num_GPUs", 1)
-                        if total_job_gpus > 0:
-                            ratio = job_gpus_on_node / total_job_gpus
-                            used_resources["cpu"] += job.get("job_cpu_demand", 0) * ratio
-                            used_resources["memory"] += job.get("job_mem_demand", 0) * ratio
-        
-        # Calculate available resources
-        available = {
-            "gpu": max(0, server_capacity["gpu"] - used_resources["gpu"]),
-            "cpu": max(0, server_capacity["cpu"] - used_resources["cpu"]),
-            "memory": max(0, server_capacity["memory"] - used_resources["memory"]),
-        }
-        
-        return available
+    
+    return res_map
 
 
-    def calculate_gpu_proportional_allocation(
-        job_gpu_demand_in_server: int
-    ) -> dict:
-        """
-        Calculate GPU-proportional resource allocation for a job
-        Args:
-            job_gpu_demand_in_server: Job's GPU demand
-        Returns:
-            dict with proportional CPU and memory allocation
-        """
-        # GPU proportional share
-        return {
-            "cpu": job_gpu_demand_in_server * 3,  
-            "memory": job_gpu_demand_in_server * 62.5,  
-        }
+def find_num_free_GPUs(gpu_df: pd.DataFrame) -> int:
+    """
+    Find the number of free GPU's
+    Args:
+    gpu_df : DataFrame consisting of information about GPUs
+    Returns:
+    int : Number of free GPUs
+    """
+    return len(gpu_df.loc[gpu_df["IN_USE"] == False])
+
+
+def get_server_available_resources(
+    node_id: int, node_info: dict, gpu_df: pd.DataFrame, active_jobs: dict
+) -> dict:
+    """
+    Calculate available resources on a server
+    Args:
+        node_id: Server node ID
+        node_info: Server information dict
+        gpu_df: GPU dataframe
+        active_jobs: Active jobs dictionary
+    Returns:
+        dict with keys: 'gpu', 'cpu', 'memory'
+    """
+    # Get server capacity
+    server_capacity = {
+        "gpu": node_info.get("numGPUs", 0),
+        "cpu": node_info.get("numCPUcores", 0),
+        "memory": node_info.get("memoryCapacity", 0),
+    }
+    
+    # Calculate used resources
+    used_resources = {"gpu": 0, "cpu": 0, "memory": 0}
+    
+    # Count used GPUs on this node
+    node_gpus = gpu_df.loc[gpu_df["Node_ID"] == node_id]
+    used_resources["gpu"] = len(node_gpus.loc[node_gpus["IN_USE"] == True])
+    
+    # Calculate used CPU and memory from running jobs on this node
+    running_job_ids = node_gpus.loc[node_gpus["IN_USE"] == True]["JOB_IDS"].unique()
+    for job_id in running_job_ids:
+        if job_id is not None and job_id in active_jobs:
+            job = active_jobs[job_id]
+            # Get allocated resources for this job on this node
+            # Note: This is a simplified calculation
+            # In reality, we need to track per-node resource allocation
+            if job.get("is_running", False):
+                # Estimate based on job's GPU allocation on this node
+                job_gpus_on_node = len(node_gpus.loc[
+                    (node_gpus["IN_USE"] == True) & (node_gpus["JOB_IDS"] == job_id)
+                ])
+                if job_gpus_on_node > 0:
+                    # Proportional allocation
+                    total_job_gpus = job.get("num_GPUs", 1)
+                    if total_job_gpus > 0:
+                        ratio = job_gpus_on_node / total_job_gpus
+                        used_resources["cpu"] += job.get("job_cpu_demand", 0) * ratio
+                        used_resources["memory"] += job.get("job_mem_demand", 0) * ratio
+    
+    # Calculate available resources
+    available = {
+        "gpu": max(0, server_capacity["gpu"] - used_resources["gpu"]),
+        "cpu": max(0, server_capacity["cpu"] - used_resources["cpu"]),
+        "memory": max(0, server_capacity["memory"] - used_resources["memory"]),
+    }
+    
+    return available
+
+
+def calculate_gpu_proportional_allocation(
+    job_gpu_demand_in_server: int
+) -> dict:
+    """
+    Calculate GPU-proportional resource allocation for a job
+    Args:
+        job_gpu_demand_in_server: Job's GPU demand
+    Returns:
+        dict with proportional CPU and memory allocation
+    """
+    # GPU proportional share
+    return {
+        "cpu": job_gpu_demand_in_server * 3,  
+        "memory": job_gpu_demand_in_server * 62.5,  
+    }

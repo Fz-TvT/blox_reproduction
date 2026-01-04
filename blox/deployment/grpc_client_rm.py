@@ -24,11 +24,11 @@ def get_tput_from_job_dict(job_dict, cpu_allocated=None, mem_allocated=None):
     
     Args:
         job_dict: 作业字典
-        cpu_allocated: 分配的 CPU 数量（如果为 None，使用 job_dict["cpus"]）
-        mem_allocated: 分配的内存数量（如果为 None，使用 job_dict["mem"]）
+        cpu_allocated: 分配的 CPU 数量（如果为 None,使用 job_dict["cpus"])
+        mem_allocated: 分配的内存数量（如果为 None,使用 job_dict["mem"])
     
     Returns:
-        tput 值（float），如果无法获取则返回 synergy_speedup 或 1.0（默认值）
+        tput 值(float),如果无法获取则返回 synergy_speedup 或 1.0(默认值）
     """
     # 首先检查是否有直接存储的 tput 值
     if "tput" in job_dict and job_dict["tput"] is not None:
