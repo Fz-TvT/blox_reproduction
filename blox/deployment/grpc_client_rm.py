@@ -300,43 +300,28 @@ class ResourceManagerComm(object):
                     )
                     # Same job ids can be running at multiple ip addr
             else:
-                # this is a simulation
-                # profile scaling by number of GPUs
-                # 确保只初始化一次
-                if not hasattr(self, 'optimus_scale_by_gpus'):
-                    self.optimus_scale_by_gpus = {
-                        "0": 0.0,    # 0 GPU，无加速
-                        "1": 1.0,    # 基准
-                        "1.0": 1.0,    # 基准
-                        "2": 1.95,  # ~98% 效率
-                        "2.0": 1.95,  # ~98% 效率
-                        "3": 2.85,  # ~95% 效率
-                        "3.0": 2.85,  # ~95% 效率
-                        "4": 3.75,  # ~94% 效率
-                        "4.0": 3.75,  # ~94% 效率
-                        "5": 4.60,  # ~92% 效率
-                        "5.0": 4.60,  # ~92% 效率
-                        "6": 5.40,  # ~90% 效率
-                        "6.0": 5.40,  # ~90% 效率
-                        "7": 6.15,  # ~88% 效率
-                        "7.0": 6.15,  # ~88% 效率
-                        "8": 6.85,  # ~86% 效率
-                        "8.0": 6.85,  # ~86% 效率
-                        "9": 7.50,  # ~83% 效率
-                        "9.0": 7.50,  # ~83% 效率
-                        "10.0": 8.10,  # ~80% 效率
-                    }
+                # # this is a simulation
+                # # profile scaling by number of GPUs
+                # # 确保只初始化一次
+            
                 if active_job_dict[job_id]["previously_launched"] == False:
                     active_job_dict[job_id]["job_launched_first_time"] = True
                 if active_job_dict[job_id]["previously_launched"] == True:
                     active_job_dict[job_id]["job_launched_first_time"] = False
 
                 active_job_dict[job_id]["previously_launched"] = True
-                job=active_job_dict[job_id]
-                # 获取 GPU 数量（数值）
-                num_gpus = active_job_dict[job_id]["num_GPUs"]
-                # print("job_id",job_id)
-                # print("num_gpus",num_gpus)
+                job = active_job_dict[job_id]
+                
+                # 获取 GPU 数量（数值），确保是整数类型
+                num_gpus_raw = active_job_dict[job_id]["num_GPUs"]
+                try:
+                    if isinstance(num_gpus_raw, str):
+                        num_gpus = int(num_gpus_raw) if num_gpus_raw.isdigit() else 0
+                    else:
+                        num_gpus = int(num_gpus_raw) if num_gpus_raw is not None else 0
+                except (ValueError, TypeError):
+                    num_gpus = 0
+                
                 # 如果 num_GPUs 为 0，作业没有运行，不应该有迭代进度
                 if num_gpus == 0:
                     # 作业没有 GPU，不更新迭代进度，只更新 attained_service（为0）
@@ -349,54 +334,131 @@ class ResourceManagerComm(object):
                         "per_iter_time": active_job_dict[job_id]["job_iteration_time"],
                     }
                     continue
-
-                total_iterations_in_round = (
-                    round_duration / job["job_iteration_time"]
-                ) ##计算本轮能完成多少迭代
                 
-                # attained_service 应该考虑 GPU 数量：如果有 N 个 GPU，每轮累加 round_duration * N
-                # 这与 attained_service_scheduler 的计算方式一致
-                # 获取 tput（从字典形式的 job 中）
-                tput = get_tput_from_job_dict(job, job.get("cpus", 0), job.get("mem", 0))
-                attained_service = (
-                    active_job_dict[job_id]["tracked_metrics"]["attained_service"]
-                    + round_duration * num_gpus * tput
-                )
+                try:
+                    # 获取 tput（从字典形式的 job 中）
+                    tput = get_tput_from_job_dict(job, job.get("cpus", 0), job.get("mem", 0))
+                    if tput is None or tput <= 0:
+                        # 如果无法获取 tput，使用默认值 1.0
+                        tput = 1.0
+                    
+                    # 根据公式：训练时间 = 样本数 * 训练轮数 / tput
+                    # 实际迭代时间 = 基准迭代时间 / tput
+                    # 每轮完成的迭代数 = round_duration / (基准迭代时间 / tput) = round_duration * tput / 基准迭代时间
+                    base_iteration_time = job.get("job_iteration_time", 1.0)
+                    if base_iteration_time <= 0:
+                        base_iteration_time = 1.0
+                    
+                    actual_iteration_time = base_iteration_time / tput if tput > 0 else base_iteration_time
+                    actual_iteration_time = base_iteration_time
+                    # 防止除零错误
+                    if actual_iteration_time <= 0:
+                        actual_iteration_time = base_iteration_time
+                    
+                    # 计算本轮能完成多少迭代（考虑 tput 的影响）
+                    # 对于多 GPU：每个 GPU 并行处理，所以总迭代数 = 单 GPU 迭代数 * GPU 数量
+                    iterations_per_gpu_in_round = round_duration / actual_iteration_time if actual_iteration_time > 0 else 0
+                    total_iterations_in_round = iterations_per_gpu_in_round * num_gpus
+                    
+                    # attained_service 应该考虑 GPU 数量：如果有 N 个 GPU，每轮累加 round_duration * N
+                    # 这与 attained_service_scheduler 的计算方式一致
+                    attained_service = (
+                        active_job_dict[job_id]["tracked_metrics"]["attained_service"]
+                        + round_duration * num_gpus
+                    )
 
-                per_iteration_time = job["job_iteration_time"]
+                    # 实际迭代时间（考虑 tput 影响）
+                    per_iteration_time = actual_iteration_time
+
+                    # 新的总迭代次数 = 本轮完成的迭代次数 + 历史已经完成的迭代次数
+                    job_executed_iteration = active_job_dict[job_id].get("job_executed_iteration", 0)
+                    total_iteration_achieved = (
+                        total_iterations_in_round
+                        + job_executed_iteration
+                    )
+                    
+                    # CAUTION: In place update
+                    # TODO: Clean this part of update
+                    active_job_dict[job_id][
+                        "job_executed_iteration"
+                    ] = total_iteration_achieved
+                    
+                    if (total_iteration_achieved >= active_job_dict[job_id]["job_total_iteration"]):
+                        job_exit = True
+
+                    if job_exit == True:
+                        metric_data_dict[job_id] = {
+                            "attained_service": attained_service,
+                            "per_iter_time": per_iteration_time,
+                            "job_exit": True,
+                        }
+                    else:
+                        metric_data_dict[job_id] = {
+                            "attained_service": attained_service,
+                            "per_iter_time": per_iteration_time,
+                        }
+                except Exception as e:
+                    # 如果计算过程中出现异常，使用默认值，确保至少返回基本的 metric 数据
+                    import logging
+                    logging.warning(f"Error calculating metrics for job {job_id}: {e}")
+                    # 使用默认值返回 metric，避免返回空字典
+                    metric_data_dict[job_id] = {
+                        "attained_service": active_job_dict[job_id]["tracked_metrics"].get("attained_service", 0),
+                        "per_iter_time": job.get("job_iteration_time", 1.0),
+                    }
+
+
+                # if active_job_dict[job_id]["previously_launched"] == False:
+                #     active_job_dict[job_id]["job_launched_first_time"] = True
+                # if active_job_dict[job_id]["previously_launched"] == True:
+                #     active_job_dict[job_id]["job_launched_first_time"] = False
+
+                # active_job_dict[job_id]["previously_launched"] = True
+
+                # total_iterations_in_round = (
+                #     round_duration / active_job_dict[job_id]["job_iteration_time"]
+                # )
+                # attained_service = (
+                #     active_job_dict[job_id]["tracked_metrics"]["attained_service"]
+                #     + round_duration
+                # )
+
+                # per_iteration_time = active_job_dict[job_id]["job_iteration_time"]
 
                 # total_iteration_achieved = (
                 #     total_iterations_in_round
-                #     + active_job_dict[job_id]["job_executed_iteration"])
-                #新的总迭代次数=本轮完成的迭代次数+历史已经完成的迭代次数
-                num_gpus = active_job_dict[job_id]["num_GPUs"]
-                # print("num_gpus",num_gpus)
-                if num_gpus != "0":
-                    total_iteration_achieved = (
-                        total_iterations_in_round * num_gpus * tput
-                        + active_job_dict[job_id]["job_executed_iteration"]
-                    )
-                else:
-                    total_iteration_achieved = active_job_dict[job_id]["job_executed_iteration"]
-                
-                # print("gpu",self.optimus_scale_by_gpus[str(active_job_dict[job_id]["job_gpu_demand"])])
+                #     + active_job_dict[job_id]["job_executed_iteration"]
+                # )
+                # if os.environ["sched_policy"] == "Optimus":
+                #     total_iteration_achieved = (
+                #         total_iterations_in_round
+                #         * self.optimus_scale_by_gpus[
+                #             active_job_dict[job_id]["total_gpus"]
+                #         ]
+                #         + active_job_dict[job_id]["job_executed_iteration"]
+                #     )
+                # if (
+                #     total_iteration_achieved
+                #     >= active_job_dict[job_id]["job_total_iteration"]
+                # ):
+                #     job_exit = True
 
-                # CAUTION: In place update
-                # TODO: Clean this part of update
-                active_job_dict[job_id][
-                    "job_executed_iteration"
-                ] = total_iteration_achieved
+                # # CAUTION: In place update
+                # # TODO: Clean this part of update
+                # active_job_dict[job_id][
+                #     "job_executed_iteration"
+                # ] = total_iteration_achieved
 
-                if job_exit == True:
-                    metric_data_dict[job_id] = {
-                        "attained_service": attained_service,
-                        "per_iter_time": per_iteration_time,
-                        "job_exit": True,
-                    }
-                if not job_exit:
-                    metric_data_dict[job_id] = {
-                        "attained_service": attained_service,
-                        "per_iter_time": per_iteration_time,
-                    }
+                # if job_exit == True:
+                #     metric_data_dict[job_id] = {
+                #         "attained_service": attained_service,
+                #         "per_iter_time": per_iteration_time,
+                #         "job_exit": True,
+                #     }
+                # if not job_exit:
+                #     metric_data_dict[job_id] = {
+                #         "attained_service": attained_service,
+                #         "per_iter_time": per_iteration_time,
+                #     }
 
         return metric_data_dict

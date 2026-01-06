@@ -39,8 +39,11 @@ class RMServer(rm_pb2_grpc.RMServerServicer):
         This registers the workers and the information we need
         """
         # print("Called R worker")
-        message_processed = MessageToDict(request, including_default_value_fields=True)
-        # message_processed = MessageToDict(request)
+        # Use preserving_proto_field_name=True to keep original field names
+        message_processed = MessageToDict(request, including_default_value_fields=True, preserving_proto_field_name=True)
+        # Debug: print converted message
+        print(f"DEBUG RegisterWorker: message_processed keys: {list(message_processed.keys())}")
+        print(f"DEBUG RegisterWorker: message_processed: {message_processed}")
         # TODO: Put a lock here
         self.added_servers.put(message_processed)
         # print("Length of added server queue {}".format(self.added_servers.qsize()))

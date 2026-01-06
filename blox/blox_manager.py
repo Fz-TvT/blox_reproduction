@@ -115,27 +115,6 @@ class BloxManager(object):
         ipaddress_to_fetch_from = list()
         if_simulation = list()
 
-        # update Pollux specific metrics
-        if job_state.scheduler_name == "Pollux":
-            # find nodes used by more than one jobs
-            interfere_nodes = set(idx for idx in range(cluster_state.node_counter)
-                                  if sum(len(set(val)) > 1 and idx in val
-                                         for key, val in cluster_state.allocations.items()) > 1)
-
-            # update job_state.active_jobs["tracked_metrics"]["pollux_metrics"]
-            for jid in job_state.active_jobs:
-                job = job_state.active_jobs[jid]["tracked_metrics"]["pollux_metrics"]
-                alloc_set = set(cluster_state.allocations.get(job.name, []))
-                interference = 0.0
-                if len(alloc_set) > 1 and any(idx in interfere_nodes for idx in alloc_set):
-                    interference = job_state.interference
-                job.step(job_state.round_duration, interference=interference)
-
-            # this dict is the same of self.allocation in Pollux repo
-            cluster_state.allocations = {k: v for k, v in cluster_state.allocations.items() if
-                                        k in job_state.active_jobs}
-
-
         for jid in job_state.active_jobs:
             if job_state.active_jobs[jid]["is_running"] == True:
                 job_id_to_fetch.append(jid)
@@ -143,6 +122,12 @@ class BloxManager(object):
                 ipaddress_to_fetch_from.append(
                     job_state.active_jobs[jid]["running_ip_address"]
                 )
+            # elif job_state.active_jobs[jid].get("simulation", False):
+            #     # 在模拟模式下，也包含未运行的作业，以便收集它们的指标
+            #     # 对于未运行的作业，ipaddress 使用空列表（模拟模式下不会使用）
+            #     job_id_to_fetch.append(jid)
+            #     if_simulation.append(True)
+            #     ipaddress_to_fetch_from.append([])
         metric_data = self.comm_node_manager.get_metrics(
             job_id_to_fetch,
             ipaddress_to_fetch_from,
@@ -183,13 +168,6 @@ class BloxManager(object):
                                         job_state.active_jobs[jid]
                                     )
                                     # track completion_time and submission_time as maintained in the Pollux Job object
-                                    if job_state.scheduler_name == "Pollux":
-                                        del job_state.job_runtime_stats[jid]["tracked_metrics"]["pollux_metrics"]
-                                        job_state.job_runtime_stats[jid]["completion_time_pollux"] = \
-                                        job_state.active_jobs[jid]["tracked_metrics"]["pollux_metrics"].completion_time
-                                        job_state.job_runtime_stats[jid]["submission_time_pollux"] = \
-                                        job_state.active_jobs[jid]["tracked_metrics"]["pollux_metrics"].submission_time
-
 
                                 jid_to_terminate.append(jid)
                                 # delete GPU utilization
@@ -417,11 +395,9 @@ class BloxManager(object):
             active_jobs.active_jobs[jid]["running_ip_address"] = list(
                 set(ipaddress_to_launch)
             )
-
             if "suspended" in active_jobs.active_jobs[jid]:
                 active_jobs.active_jobs[jid]["suspended"] = 0
             _mark_gpu_in_use_by_gpu_id(gpus_to_launch, jid, cluster_state.gpu_df)
-            # Update CPU and memory usage for this job
             res_map = active_jobs.active_jobs[jid].get("res_map", {})
             if res_map:
                 _update_server_resource_usage(jid, res_map, cluster_state, operation="add")
@@ -494,7 +470,6 @@ def _find_ipaddr_by_gpu_ids(gpu_ids: List[int], gpu_df: pd.DataFrame) -> List[st
     Returns:
         List of IP addresses for corresponding gpu_ids
     """
-
     ipaddress_to_launch = list()
     for gid in gpu_ids:
         gid_ipaddr = gpu_df[gpu_df["GPU_ID"] == gid]["IP_addr"].tolist()
@@ -618,14 +593,29 @@ def get_cluster_resource_usage(cluster_state) -> dict:
     total_cpu_capacity = 0
     total_memory_capacity = 0
     
-    for node_id, usage in cluster_state.server_resource_usage.items():
-        total_cpu_used += usage["cpu_used"]
-        total_memory_used += usage["memory_used"]
+    # Iterate over server_map to ensure we include all nodes with capacity info
+    # This ensures consistency between capacity and usage statistics
+    for node_id, node_info in cluster_state.server_map.items():
+        # Get capacity from server_map
+        cpu_capacity = node_info.get("numCPUcores", 0)
+        memory_capacity = node_info.get("memoryCapacity", 0)
+        total_cpu_capacity += cpu_capacity
+        total_memory_capacity += memory_capacity
         
-        if node_id in cluster_state.server_map:
-            node_info = cluster_state.server_map[node_id]
-            total_cpu_capacity += node_info.get("numCPUcores", 0)
-            total_memory_capacity += node_info.get("memoryCapacity", 0)
+        # Get usage from server_resource_usage (use .get() for safety)
+        usage = cluster_state.server_resource_usage.get(node_id, {})
+        cpu_used = usage.get("cpu_used", 0.0)
+        memory_used = usage.get("memory_used", 0.0)
+        total_cpu_used += cpu_used
+        total_memory_used += memory_used
+    
+    # Also check for any nodes in server_resource_usage that might not be in server_map
+    # (shouldn't happen normally, but handle edge cases)
+    for node_id, usage in cluster_state.server_resource_usage.items():
+        if node_id not in cluster_state.server_map:
+            # Node exists in usage but not in server_map - still count usage
+            total_cpu_used += usage.get("cpu_used", 0.0)
+            total_memory_used += usage.get("memory_used", 0.0)
     
     cpu_utilization = (total_cpu_used / total_cpu_capacity * 100) if total_cpu_capacity > 0 else 0
     memory_utilization = (total_memory_used / total_memory_capacity * 100) if total_memory_capacity > 0 else 0

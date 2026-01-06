@@ -66,7 +66,7 @@ class Synergy_fifo(SchedulingPolicy):
         sorted_job_order = sorted(
             job_dict.items(), key=lambda x: (x[1]["job_priority"], x[1]["submit_time"])
         )
-        jobs_this_round = []
+        jobs_this_round = sorted_job_order
         for job in sorted_job_order:
             deficit_num = job[1]["job_gpu_demand"] - job[1].get("num_GPUs", 0)
             if deficit_num > 0 and free_gpus - deficit_num >= 0:
@@ -75,17 +75,8 @@ class Synergy_fifo(SchedulingPolicy):
             elif deficit_num > 0 and free_gpus > 0:
                 jobs_this_round.append(job)
                 free_gpus =0
-            if job[1]["time_since_scheduled"] > 10 * 3600:
+            if job[1]["time_since_scheduled"] > 100 * 3600:
                 job[1]["job_priority"] = 1
-        
-        # 对 jobs_this_round 根据 gpu_demand、cpu、memory_demand 进行排序
-        jobs_this_round.sort(
-            key=lambda x: (
-                x[1].get("job_gpu_demand", 0),      # 首先按 GPU 需求排序
-                x[1].get("job_cpu_demand", 0),      # 然后按 CPU 需求排序
-                x[1].get("job_mem_demand", 0)       # 最后按内存需求排序
-            )
-        )
         
         schedule_info = dict()
         schedule_info["jobs_this_round"] = jobs_this_round

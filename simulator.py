@@ -44,7 +44,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         small_trace=False,
         placement=True,
         prioritize=False,
-        round_duration=300,
+        round_duration=30000,
         number_of_machines=4,
         gpus_per_machine=8,
         memory_per_machine=500,
@@ -486,7 +486,7 @@ def launch_server(args) -> grpc.Server:
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
     runner = SimulatorRunner(
             args.cluster_job_log,
-            np.arange(1, args.jobs_per_hour+1, 1.0).tolist(),
+            np.arange(args.jobs_per_hour, args.jobs_per_hour+3, 1.0).tolist(),
             (args.start_job_track, args.end_job_track),
             [
                 # "Tiresias",
