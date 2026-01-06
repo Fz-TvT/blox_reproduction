@@ -3,11 +3,11 @@ import pandas as pd
 from operator import getitem
 
 from typing import Optional
+from placement.placement import find_num_free_GPUs
 
-
-class Fifo(SchedulingPolicy):
+class Synergy_fifo(SchedulingPolicy):
     """
-    Implements Fifo Scheduler
+    Implements Fifo Scheduler+synergy
     """
 
     def __init__(self, args):
@@ -61,13 +61,25 @@ class Fifo(SchedulingPolicy):
                 policy. From the scheduler
                 And read it as they like. More on this case.
         """
+        ##Synergy-tune
+        free_gpus = find_num_free_GPUs(gpu_df) ##剩余GPU数量
         sorted_job_order = sorted(
             job_dict.items(), key=lambda x: (x[1]["job_priority"], x[1]["submit_time"])
         )
+        jobs_this_round = sorted_job_order
         for job in sorted_job_order:
+            deficit_num = job[1]["job_gpu_demand"] - job[1].get("num_GPUs", 0)
+            if deficit_num > 0 and free_gpus - deficit_num >= 0:
+                jobs_this_round.append(job)
+                free_gpus -= deficit_num
+            elif deficit_num > 0 and free_gpus > 0:
+                jobs_this_round.append(job)
+                free_gpus =0
             if job[1]["time_since_scheduled"] > 100 * 3600:
                 job[1]["job_priority"] = 1
+        
         schedule_info = dict()
+        schedule_info["jobs_this_round"] = jobs_this_round
         schedule_info["job_order"] = sorted_job_order
         schedule_info["run_all_jobs"] = False
 

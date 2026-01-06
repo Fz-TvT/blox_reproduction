@@ -66,6 +66,9 @@ class ClusterState(object):
         while True:
             try:
                 node_info = new_nodes.pop(0)
+                # Debug: print node_info keys to verify field names
+                print(f"DEBUG: Adding node {self.node_counter}, node_info keys: {list(node_info.keys())}")
+                print(f"DEBUG: node_info content: {node_info}")
                 self.server_map[self.node_counter] = node_info
                 # Initialize resource usage tracking for this server
                 self.server_resource_usage[self.node_counter] = {
