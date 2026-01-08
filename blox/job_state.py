@@ -81,10 +81,10 @@ class JobState(object):
                         ] = self.active_jobs[jid]["tracked_metrics"][
                             "attained_service_scheduler"
                         ] + (
-                            round_duration * self.active_jobs[jid]["num_GPUs"]
+                            round_duration * self.active_jobs[jid]["num_allocated_gpus"]
                         )
                     else:
-                        metric_data[jid]["attained_service_scheduler"] = round_duration* self.active_jobs[jid]["num_GPUs"]
+                        metric_data[jid]["attained_service_scheduler"] = round_duration* self.active_jobs[jid]["num_allocated_gpus"]
                     self.active_jobs[jid]["tracked_metrics"].update(
                         metric_data.get(jid)
                     )
