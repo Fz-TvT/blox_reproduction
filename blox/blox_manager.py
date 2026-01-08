@@ -115,13 +115,20 @@ class BloxManager(object):
         ipaddress_to_fetch_from = list()
         if_simulation = list()
 
+        print(f"[DEBUG] update_metrics: Total active jobs: {len(job_state.active_jobs)}")
+        running_jobs = []
+        non_running_jobs = []
         for jid in job_state.active_jobs:
             if job_state.active_jobs[jid]["is_running"] == True:
+                running_jobs.append(jid)
                 job_id_to_fetch.append(jid)
                 if_simulation.append(job_state.active_jobs[jid]["simulation"])
                 ipaddress_to_fetch_from.append(
                     job_state.active_jobs[jid]["running_ip_address"]
                 )
+            else:
+                non_running_jobs.append(jid)
+        print(f"[DEBUG] update_metrics: Running jobs: {running_jobs}, Non-running jobs: {non_running_jobs}")
             # elif job_state.active_jobs[jid].get("simulation", False):
             #     # 在模拟模式下，也包含未运行的作业，以便收集它们的指标
             #     # 对于未运行的作业，ipaddress 使用空列表（模拟模式下不会使用）
@@ -172,6 +179,8 @@ class BloxManager(object):
                                 jid_to_terminate.append(jid)
                                 # delete GPU utilization
                                 _free_gpu_by_jobid(jid, cluster_state.gpu_df)
+                                # Free CPU and memory resources for completed job
+                                _free_server_resources_by_jobid(jid, job_state.active_jobs, cluster_state)
                                 # log the finished jobs
                                 job_state.finished_job[jid] = 1
 
@@ -201,6 +210,76 @@ class BloxManager(object):
         for jid in jid_to_terminate:
             job_state.active_jobs.pop(jid)
 
+        # Update cluster_state.server_resource_usage based on running jobs' res_map
+        # This ensures server_resource_usage reflects actual resource usage from running jobs
+        # This is especially important for Synergy_FIFO scheduler
+        scheduler = os.environ.get("sched_policy", "")
+        if scheduler == "Synergy_fifo":
+            # Recalculate server_resource_usage from running jobs' res_map
+            # This ensures consistency between placement calculations and actual state
+            for node_id in cluster_state.server_map:
+                # Get capacity from server_map
+                cpu_capacity = cluster_state.server_map[node_id].get("numCPUcores", 0)
+                mem_capacity = cluster_state.server_map[node_id].get("memoryCapacity", 0)
+                gpu_capacity = cluster_state.server_map[node_id].get("numGPUs", 0)
+                
+                # If capacity is 0, calculate from GPU count (proportional allocation: 3 CPU/GPU, 62.5 GB/GPU)
+                if gpu_capacity > 0:
+                    if cpu_capacity == 0:
+                        cpu_capacity = gpu_capacity * 3
+                    if mem_capacity == 0:
+                        mem_capacity = gpu_capacity * 62.5
+                
+                # Initialize if not exists
+                if node_id not in cluster_state.server_resource_usage:
+                    cluster_state.server_resource_usage[node_id] = {
+                        "cpu_used": 0.0,
+                        "memory_used": 0.0,
+                        "gpu_used": 0
+                    }
+                
+                # Calculate used resources from running jobs' res_map
+                cpu_used = 0.0
+                memory_used = 0.0
+                gpu_used = 0
+                
+                for jid, job in job_state.active_jobs.items():
+                    if job.get("is_running", False):
+                        res_map = job.get("res_map", {})
+                        if res_map:
+                            for server_key, resources in res_map.items():
+                                # Extract node_id from ServerWrapper or dict key
+                                if hasattr(server_key, 'node_id'):
+                                    res_node_id = server_key.node_id
+                                elif hasattr(server_key, 'server_id'):
+                                    res_node_id = server_key.server_id
+                                elif isinstance(server_key, int):
+                                    res_node_id = server_key
+                                else:
+                                    continue
+                                
+                                if res_node_id == node_id:
+                                    # Add resources from this job on this node
+                                    cpu_used += resources.get("cpu", 0) if isinstance(resources, dict) else 0
+                                    memory_used += resources.get("mem", 0) if isinstance(resources, dict) else 0
+                                    gpu_used += resources.get("gpu", 0) if isinstance(resources, dict) else 0
+                
+                # Update server_resource_usage
+                cluster_state.server_resource_usage[node_id]["cpu_used"] = cpu_used
+                cluster_state.server_resource_usage[node_id]["memory_used"] = memory_used
+                cluster_state.server_resource_usage[node_id]["gpu_used"] = gpu_used
+                
+                # Ensure non-negative and don't exceed capacity
+                cluster_state.server_resource_usage[node_id]["cpu_used"] = max(
+                    0, min(cpu_used, cpu_capacity)
+                )
+                cluster_state.server_resource_usage[node_id]["memory_used"] = max(
+                    0, min(memory_used, mem_capacity)
+                )
+                cluster_state.server_resource_usage[node_id]["gpu_used"] = max(
+                    0, min(gpu_used, gpu_capacity)
+                )
+
         # update cluster use
         total_jobs, jobs_in_queue, jobs_running = _get_jobs_status(job_state)
 
@@ -214,7 +293,7 @@ class BloxManager(object):
 
         gpu_demand = 0
         for jid in job_state.active_jobs:
-            gpu_demand += job_state.active_jobs[jid]["num_GPUs"]
+            gpu_demand += job_state.active_jobs[jid]["num_allocated_gpus"]
 
         # Get cluster resource usage statistics
         resource_usage = get_cluster_resource_usage(cluster_state)
@@ -247,7 +326,7 @@ class BloxManager(object):
 
         gpu_demand = 0
         for jid in job_state.active_jobs:
-            gpu_demand += job_state.active_jobs[jid]["num_GPUs"]
+            gpu_demand += job_state.active_jobs[jid]["num_allocated_gpus"]
 
         cluster_state.cluster_stats[cluster_state.time] = {
             "total_jobs": total_jobs,
@@ -343,6 +422,7 @@ class BloxManager(object):
         terminate_rank_0_ipaddr = list()
         terminate_ipaddr = list()
         terminate_simulation = list()
+        print(f"[DEBUG] exec_jobs: Jobs to terminate: {jobs_to_terminate}, Jobs to launch: {list(jobs_to_launch.keys())}")
         print("Job IDs to terminate {}".format(jobs_to_terminate))
         for jid in jobs_to_terminate:
             # find ipaddresses for corresponding jobs to terminate
@@ -379,7 +459,22 @@ class BloxManager(object):
 
         # jobs terminated
         def launch_job_func(jid):
-            gpus_to_launch = jobs_to_launch[jid]
+            # Handle both old format (list of GPU IDs) and new format (dict with 'nodes' and 'gpus')
+            placement_info = jobs_to_launch[jid]
+            if isinstance(placement_info, dict) and 'gpus' in placement_info:
+                # New format: {job_id: {'nodes': {node_id: [gpu_ids]}, 'gpus': [all_gpu_ids]}}
+                gpus_to_launch = placement_info['gpus']
+                node_placement = placement_info.get('nodes', {})  # {node_id: [gpu_ids]}
+                # Print node-level placement information
+                if node_placement:
+                    print(f"[PLACEMENT] Job {jid} placed on nodes:")
+                    for node_id, gpu_list in node_placement.items():
+                        print(f"  Node {node_id}: {len(gpu_list)} GPUs (IDs: {gpu_list})")
+            else:
+                # Old format: {job_id: [gpu_ids]} (backward compatibility)
+                gpus_to_launch = placement_info
+                node_placement = {}
+            
             ipaddress_to_launch = _find_ipaddr_by_gpu_ids(
                 gpus_to_launch, cluster_state.gpu_df
             )
@@ -412,6 +507,7 @@ class BloxManager(object):
             results = [
                 future.result() for future in futures.as_completed(future_results)
             ]
+            print(f"[DEBUG] exec_jobs: Successfully launched {len(jobs_to_launch)} jobs: {list(jobs_to_launch.keys())}")
             print("Launched")
 
         # update the time for training
@@ -515,10 +611,10 @@ def _update_server_resource_usage(
     operation: str = "add"
 ) -> None:
     """
-    Update CPU and memory usage on servers based on job's res_map
+    Update CPU, memory, and GPU usage on servers based on job's res_map
     Args:
         job_id: Job ID
-        res_map: Resource map from placement (format: {ServerWrapper: {'cpu': int, 'mem': float, ...}})
+        res_map: Resource map from placement (format: {ServerWrapper: {'cpu': int, 'mem': float, 'gpu': int, ...}})
         cluster_state: ClusterState object
         operation: "add" to allocate resources, "remove" to free resources
     """
@@ -542,12 +638,18 @@ def _update_server_resource_usage(
         
         if node_id is None or node_id not in cluster_state.server_resource_usage:
             continue
+        
+        # Initialize gpu_used if not exists (for backward compatibility)
+        if "gpu_used" not in cluster_state.server_resource_usage[node_id]:
+            cluster_state.server_resource_usage[node_id]["gpu_used"] = 0
             
         cpu_alloc = resources.get('cpu', 0) if isinstance(resources, dict) else 0
         mem_alloc = resources.get('mem', 0) if isinstance(resources, dict) else 0
+        gpu_alloc = resources.get('gpu', 0) if isinstance(resources, dict) else 0
         
         cluster_state.server_resource_usage[node_id]["cpu_used"] += cpu_alloc * multiplier
         cluster_state.server_resource_usage[node_id]["memory_used"] += mem_alloc * multiplier
+        cluster_state.server_resource_usage[node_id]["gpu_used"] += gpu_alloc * multiplier
         
         # Ensure non-negative
         cluster_state.server_resource_usage[node_id]["cpu_used"] = max(
@@ -555,6 +657,9 @@ def _update_server_resource_usage(
         )
         cluster_state.server_resource_usage[node_id]["memory_used"] = max(
             0, cluster_state.server_resource_usage[node_id]["memory_used"]
+        )
+        cluster_state.server_resource_usage[node_id]["gpu_used"] = max(
+            0, cluster_state.server_resource_usage[node_id]["gpu_used"]
         )
 
 

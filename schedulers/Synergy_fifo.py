@@ -67,17 +67,12 @@ class Synergy_fifo(SchedulingPolicy):
             job_dict.items(), key=lambda x: (x[1]["job_priority"], x[1]["submit_time"])
         )
         jobs_this_round = sorted_job_order
+        print(f"[DEBUG] Synergy_fifo scheduler: Total jobs in dict: {len(job_dict)}, Free GPUs: {free_gpus}")
         for job in sorted_job_order:
-            deficit_num = job[1]["job_gpu_demand"] - job[1].get("num_GPUs", 0)
-            if deficit_num > 0 and free_gpus - deficit_num >= 0:
-                jobs_this_round.append(job)
-                free_gpus -= deficit_num
-            elif deficit_num > 0 and free_gpus > 0:
-                jobs_this_round.append(job)
-                free_gpus =0
-            if job[1]["time_since_scheduled"] > 100 * 3600:
-                job[1]["job_priority"] = 1
-        
+            job_id, job_info = job
+            job_status = "running" if job_info.get("is_running", False) else "pending"
+            if job_info.get("time_since_scheduled") > 100 * 3600:
+                job_info["job_priority"] = 1
         schedule_info = dict()
         schedule_info["jobs_this_round"] = jobs_this_round
         schedule_info["job_order"] = sorted_job_order

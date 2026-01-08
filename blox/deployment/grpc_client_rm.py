@@ -45,9 +45,9 @@ def get_tput_from_job_dict(job_dict, cpu_allocated=None, mem_allocated=None):
         
         # 检查模型是否有 tput 矩阵
         if hasattr(job_model, "tput") and job_model.tput is not None:
-            # 使用传入的值或字典中的值
-            cpu = cpu_allocated if cpu_allocated is not None else job_dict.get("cpus", 0)
-            mem = mem_allocated if mem_allocated is not None else job_dict.get("mem", 0)
+            # 使用传入的值或字典中的值（优先使用新字段名 *_allocated）
+            cpu = cpu_allocated if cpu_allocated is not None else job_dict.get("cpus_allocated", job_dict.get("cpus", 0))
+            mem = mem_allocated if mem_allocated is not None else job_dict.get("mem_allocated", job_dict.get("mem", 0))
             
             # CPU 和内存值映射（与 Job 类中的定义一致）
             cpu_val = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 9, 7: 12, 8: 24}
@@ -313,7 +313,7 @@ class ResourceManagerComm(object):
                 job = active_job_dict[job_id]
                 
                 # 获取 GPU 数量（数值），确保是整数类型
-                num_gpus_raw = active_job_dict[job_id]["num_GPUs"]
+                num_gpus_raw = active_job_dict[job_id]["num_allocated_gpus"]
                 try:
                     if isinstance(num_gpus_raw, str):
                         num_gpus = int(num_gpus_raw) if num_gpus_raw.isdigit() else 0
@@ -337,7 +337,7 @@ class ResourceManagerComm(object):
                 
                 try:
                     # 获取 tput（从字典形式的 job 中）
-                    tput = get_tput_from_job_dict(job, job.get("cpus", 0), job.get("mem", 0))
+                    tput = get_tput_from_job_dict(job, job.get("cpu_allocated"), job.get("mem_allocated"))
                     if tput is None or tput <= 0:
                         # 如果无法获取 tput，使用默认值 1.0
                         tput = 1.0

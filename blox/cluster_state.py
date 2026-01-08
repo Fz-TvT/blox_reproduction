@@ -40,6 +40,8 @@ class ClusterState(object):
                 "Local_GPU_ID",
                 "Node_ID",
                 "IP_addr",
+                "numCPUcores",
+                "memoryCapacity",
                 "IN_USE",
                 "JOB_IDS",
             ]
@@ -92,6 +94,8 @@ class ClusterState(object):
                                 "GPU_UUID": gpu_uuid,
                                 "Local_GPU_ID": local_gpu_id,
                                 "IP_addr": node_info["ipaddr"],
+                                "numCPUcores":3,
+                                "memoryCapacity":62.5,
                                 "IN_USE": False,
                                 "JOB_IDS": None,
                             }

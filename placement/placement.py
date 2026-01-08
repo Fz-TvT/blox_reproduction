@@ -44,53 +44,38 @@ class JobPlacement(object):
         """
         job_order = new_job_schedule["job_order"]
         scheduler = os.environ["sched_policy"]
-        print("sche",scheduler)
         jobs_to_terminate = list()
         job_to_launch = dict()  # Initialize job_to_launch dictionary
         launched_job_ids = list()
         # go over jobs in job order
-        
+        # print("scheduler",scheduler)
         #Borrowed from https://github.com/msr-fiddle/synergy/blob/master/simulator/resources/cluster.py#L581
         if scheduler=="Synergy_fifo":
             jobs_to_terminate = list()
             job_to_launch = dict()  # Initialize job_to_launch dictionary
             jobs_this_round = new_job_schedule["jobs_this_round"]
-            print("jobs_this_round", jobs_this_round)
             # Calculate total GPU demand and capacity for proportional allocation
-            total_gpu_demand = sum(
-                job[1].get("job_gpu_demand", 0) for job in jobs_this_round
-            )
-            total_gpu_capacity = sum(
-                node_info[node_id].get("numGPUs", 0) for node_id in node_info
-            )
-            
-            # Initialize server resource usage from cluster_state if available
-            # Otherwise, calculate from scratch
+            # Initialize server resource usage from cluster_state
+            # cluster_state.server_resource_usage is updated in update_metrics() based on running jobs' res_map
             server_resource_usage = {}
-            if cluster_state:
-                # Use cluster_state.server_resource_usage as base
+            if cluster_state and hasattr(cluster_state, 'server_resource_usage'):
+                # Use cluster_state.server_resource_usage as base (updated in update_metrics)
                 for node_id in node_info:
-                    if node_id in cluster_state.server_resource_usage:
-                        # Get capacity from node_info
-                        cpu_capacity = node_info[node_id].get("numCPUcores", 0)
-                        mem_capacity = node_info[node_id].get("memoryCapacity", 0)
-                        gpu_capacity = node_info[node_id].get("numGPUs", 0)
-                        
-                        # Get used resources from cluster_state
-                        cpu_used = cluster_state.server_resource_usage[node_id].get("cpu_used", 0)
-                        mem_used = cluster_state.server_resource_usage[node_id].get("memory_used", 0)
-                        
-                        # Calculate available resources
-                        server_resource_usage[node_id] = {
-                            "gpu": gpu_capacity - len(gpu_df.loc[(gpu_df["Node_ID"] == node_id) & (gpu_df["IN_USE"] == True)]),
-                            "cpu": max(0, cpu_capacity - cpu_used),
-                            "memory": max(0, mem_capacity - mem_used)
-                        }
-                    else:
-                        # Fallback to calculation if node not in cluster_state
-                        server_resource_usage[node_id] = get_server_available_resources(
-                            node_id, node_info[node_id], gpu_df, active_jobs
-                        )
+                    # Get capacity from node_info
+                    cpu_capacity = node_info[node_id].get("numCPUcores", 0)
+                    mem_capacity = node_info[node_id].get("memoryCapacity", 0)
+                    gpu_capacity = node_info[node_id].get("numGPUs", 0)
+                    # Get used resources from cluster_state (updated in update_metrics)
+                    cpu_used = cluster_state.server_resource_usage.get(node_id, {}).get("cpu_used", 0)
+                    mem_used = cluster_state.server_resource_usage.get(node_id, {}).get("memory_used", 0)
+                    gpu_used = cluster_state.server_resource_usage.get(node_id, {}).get("gpu_used", 0)
+                    # print("gpu_used",gpu_used)
+                    # Calculate available resources (consistent with CPU and memory calculation)
+                    server_resource_usage[node_id] = {
+                        "gpu": max(0, gpu_capacity - gpu_used),
+                        "cpu": max(0, cpu_capacity - cpu_used),
+                        "memory": max(0, mem_capacity - mem_used)
+                    }
             else:
                 # Fallback: calculate from scratch if cluster_state not available
                 for node_id in node_info:
@@ -98,11 +83,15 @@ class JobPlacement(object):
                         node_id, node_info[node_id], gpu_df, active_jobs
                     )
             # Process each job in order using Synergy-TUNE algorithm
+            # print(f"[DEBUG] Synergy_fifo: jobs_this_round has {len(jobs_this_round)} jobs")
             for idx, job_tuple in enumerate(jobs_this_round):
                 job_id, job_info = job_tuple
                 job = active_jobs[job_id]
                 
+                # print(f"[DEBUG] Synergy_fifo: Processing job {job_id}, is_running={job.get('is_running', False)}")
+                
                 if job.get("is_running", False):
+                    # print(f"[DEBUG] Synergy_fifo: Job {job_id} is already running, skipping")
                     continue  # Skip already running jobs
                 
                 # Get job demand vector [gpu_deficit, cpu_deficit, mem_deficit, sspeed_deficit]
@@ -112,18 +101,26 @@ class JobPlacement(object):
                 sspeed_demand = job_info.get("job_sspeed_demand", job_info.get("job_sspeed_demand_orig", 0))
                 
                 # Calculate GPU deficit (for jobs not yet running, deficit equals demand)
-                job_gpu_deficit = gpu_demand - job.get("num_GPUs", 0)
+                job_gpu_deficit = gpu_demand - job.get("num_GPUs_allocated", 0)
+                
+                # print(f"[DEBUG] Synergy_fifo: Job {job_id} - gpu_demand={gpu_demand}, num_GPUs_allocated={job.get('num_GPUs_allocated', 0)}, job_gpu_deficit={job_gpu_deficit}")
                 
                 # If job already has all needed GPUs and resources, skip placement
                 if job_gpu_deficit == 0:
+                    # print(f"[DEBUG] Synergy_fifo: Job {job_id} has no GPU deficit, skipping")
                     continue
                 
                 demand_vec = [
                     job_gpu_deficit,
-                    cpu_demand - job.get("cpus", 0),
-                    mem_demand - job.get("mem", 0),
-                    sspeed_demand - job.get("sspeed", 0)
+                    cpu_demand - job.get("cpus_allocated", 0),
+                    mem_demand - job.get("mem_allocated", 0),
+                    sspeed_demand - job.get("sspeed_allocated", 0)
                 ]
+
+                # Store demand values for potential retry after timeout
+                gpu_d = int(demand_vec[0])
+                cpu_d = float(demand_vec[1])
+                mem_d = float(demand_vec[2])
                 
                 # Define allocation callback function
                 def _call_allocate(available_gpus_dict, gpu_deficit, job_info_dict, time=None, fair=False, demand_vec=None):
@@ -133,19 +130,15 @@ class JobPlacement(object):
                     if demand_vec is None:
                         demand_vec = [gpu_deficit, 0, 0, 0]
                     
-                    gpu_d = int(demand_vec[0])
-                    cpu_d = float(demand_vec[1])
-                    mem_d = float(demand_vec[2])
-                    
-                    print(f"  _call_allocate for job {job_id}: gpu_d={gpu_d}, cpu_d={cpu_d}, mem_d={mem_d}")
+                    gpu_d_local = int(demand_vec[0])
+                    cpu_d_local = float(demand_vec[1])
+                    mem_d_local = float(demand_vec[2])
                     
                     # Try to find placement
                     placement, found, res_map, updated_server_resource_usage = self._synergy_find_placement(
                         job_info_dict, node_info, gpu_df, server_resource_usage, active_jobs,
-                        gpu_d, cpu_d, mem_d
+                        gpu_d_local, cpu_d_local, mem_d_local
                     )
-                    
-                    print(f"  _synergy_find_placement returned: found={found}, placement_len={len(placement) if placement else 0}")
                     
                     # Update server_resource_usage from returned value
                     if found and updated_server_resource_usage:
@@ -153,14 +146,19 @@ class JobPlacement(object):
                     
                     # If placement is empty, it's not a valid placement
                     if found and (not placement or len(placement) == 0):
-                        print(f"  Warning: _synergy_find_placement returned found=True but placement is empty")
                         return (False, [])
                     
                     if found:
+                        node_gpu_map = group_gpus_by_node(placement, gpu_df)
+                        job_to_launch[job_id] = {
+                        'nodes': node_gpu_map,  # Node-level placement: {node_id: [gpu_ids]}
+                        'gpus': placement       # All GPU IDs (for backward compatibility)
+                    }
                         return (True, placement)
                     return (False, [])
                 
                 # Call _tune with initial=True to start the tuning process
+                # print(f"[DEBUG] Synergy_fifo: Calling _tune for job {job_id}")
                 placement, found, res_map = self._tune(
                     job_info, demand_vec, job_gpu_deficit,
                     peer_adjust=False, initial=True, final=False,
@@ -174,39 +172,50 @@ class JobPlacement(object):
                     active_jobs=active_jobs,
                     jobs_to_terminate=jobs_to_terminate
                 )
-                
-                # print(f"Job {job_id}: _tune returned found={found}, placement={placement}, res_map keys={list(res_map.keys()) if res_map else 'empty'}")
-                
+                # print(f"[DEBUG] Synergy_fifo: Job {job_id} - found={found}, placement length={len(placement) if placement else 0}")
+
                 if found:
                     # Validate placement: must have at least one GPU
-                    if not placement or len(placement) == 0:
-                        print(f"Job {job_id}: Placement found but placement is empty, skipping")
-                        break
+
+                    # Group GPUs by node for better organization
+                    node_gpu_map = group_gpus_by_node(placement, gpu_df)
                     
-                    # Store GPU placement (keep compatibility with existing code)
-                    job_to_launch[job_id] = placement
+                    # Store placement with node information
+                    # Format: {job_id: {'nodes': {node_id: [gpu_ids]}, 'gpus': [all_gpu_ids]}}
+                    # This provides both node-level and GPU-level information
+                    job_to_launch[job_id] = {
+                        'nodes': node_gpu_map,  # Node-level placement: {node_id: [gpu_ids]}
+                        'gpus': placement       # All GPU IDs (for backward compatibility)
+                    }
+                    print("job_launch",job_to_launch)
                     # Store res_map in active_jobs for later use by job.allocate()
                     active_jobs[job_id]["res_map"] = res_map
-                    
+                    # print("placement",placement)
                     # Update job state with allocated resources (critical for metrics calculation)
                     actual_gpu_count = len(placement) if placement else 0
-                    print("actual_gpu_count", actual_gpu_count)
-                    active_jobs[job_id]["num_GPUs"] = actual_gpu_count
-                    active_jobs[job_id]["cpus"] = sum(r.get("cpu", 0) for r in res_map.values()) if res_map else 0
-                    active_jobs[job_id]["mem"] = sum(r.get("mem", 0) for r in res_map.values()) if res_map else 0
-                    active_jobs[job_id]["sspeed"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
+                    active_jobs[job_id]["num_GPUs_allocated"] = actual_gpu_count
+                    active_jobs[job_id]["cpus_allocated"] = sum(r.get("cpu", 0) for r in res_map.values()) if res_map else 0
+                    active_jobs[job_id]["mem_allocated"] = sum(r.get("mem", 0) for r in res_map.values()) if res_map else 0
+                    active_jobs[job_id]["sspeed_allocated"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
+                    # Output CPU and memory allocation information
+                    total_cpu = active_jobs[job_id]["cpus_allocated"]
+                    total_mem = active_jobs[job_id]["mem_allocated"]
+                    # print(f"Synergy_FIFO: Job {job_id} allocated - Total: GPU={actual_gpu_count}, CPU={total_cpu}, Memory={total_mem:.2f}GB")
+                    if res_map:
+                        for server, resources in res_map.items():
+                            node_id = server.server_id if hasattr(server, 'server_id') else server
+                            # print(f"  Node {node_id}: GPU={resources.get('gpu', 0)}, CPU={resources.get('cpu', 0)}, Memory={resources.get('mem', 0):.2f}GB")
                     
-                    # Update job dictionary with adjusted CPU and memory demands if needed
-                    # (demand_vec may have been adjusted by _make_fair_share)
-                    if demand_vec[1] != job_info.get("job_cpu_demand_orig", 0):
-                        active_jobs[job_id]["job_cpu_demand"] = demand_vec[1]
-                    if demand_vec[2] != job_info.get("job_mem_demand_orig", 0):
-                        active_jobs[job_id]["job_mem_demand"] = demand_vec[2]
-                else:
-                    print(f"Job {job_id}: Placement failed, breaking loop")
-                    break
+
+                # If still not found after timeout mechanism, continue to next job instead of breaking
+                # This allows other jobs to be placed even if this one fails
+                # print(f"[PLACEMENT] Job {job_id}: Placement not found - GPU demand: {gpu_demand}, CPU demand: {cpu_d}, Memory demand: {mem_d}")
+                # Print available resources for debugging
+                # for node_id in server_resource_usage:
+                #     available = server_resource_usage[node_id]
+                #     print(f"  Node {node_id}: Available - GPU={available.get('gpu', 0)}, CPU={available.get('cpu', 0):.2f}, Memory={available.get('memory', 0):.2f}")
+                continue
             
-            print(f"Synergy_fifo placement result: job_to_launch={job_to_launch}, jobs_to_terminate={jobs_to_terminate}")
             return (jobs_to_terminate, job_to_launch)
             
         else:
@@ -214,29 +223,27 @@ class JobPlacement(object):
             server_resource_usage = {}
             jobs_this_round = new_job_schedule["job_order"]
             if cluster_state and hasattr(cluster_state, 'server_resource_usage'):
-                # Use cluster_state.server_resource_usage as base
+                # Use cluster_state.server_resource_usage as base (updated in update_metrics)
                 for node_id in node_info:
-                    if node_id in cluster_state.server_resource_usage:
-                        # Get capacity from node_info
-                        cpu_capacity = node_info[node_id].get("numCPUcores", 0)
-                        mem_capacity = node_info[node_id].get("memoryCapacity", 0)
-                        gpu_capacity = node_info[node_id].get("numGPUs", 0)
-                        
-                        # Get used resources from cluster_state
-                        cpu_used = cluster_state.server_resource_usage[node_id].get("cpu_used", 0)
-                        mem_used = cluster_state.server_resource_usage[node_id].get("memory_used", 0)
-                        
-                        # Calculate available resources
-                        server_resource_usage[node_id] = {
-                            "gpu": gpu_capacity - len(gpu_df.loc[(gpu_df["Node_ID"] == node_id) & (gpu_df["IN_USE"] == True)]),
-                            "cpu": max(0, cpu_capacity - cpu_used),
-                            "memory": max(0, mem_capacity - mem_used)
-                        }
-                    else:
-                        # Fallback to calculation if node not in cluster_state
-                        server_resource_usage[node_id] = get_server_available_resources(
-                            node_id, node_info[node_id], gpu_df, active_jobs
-                        )
+                    # Get capacity from node_info, fallback to cluster_state.server_map if not available
+                    cpu_capacity = node_info[node_id].get("numCPUcores", 0)
+                    mem_capacity = node_info[node_id].get("memoryCapacity", 0)
+                    gpu_capacity = node_info[node_id].get("numGPUs", 0)
+                    # If capacity is missing, try to get from cluster_state.server_map
+                    # Get used resources from cluster_state (updated in update_metrics)
+                    cpu_used = cluster_state.server_resource_usage.get(node_id, {}).get("cpu_used", 0)
+                    mem_used = cluster_state.server_resource_usage.get(node_id, {}).get("memory_used", 0)
+                    gpu_used = cluster_state.server_resource_usage.get(node_id, {}).get("gpu_used", 0)
+                    # print("cpu_used",cpu_used)
+                    # Calculate available resources (consistent with CPU and memory calculation)
+                    available_cpu = max(0, cpu_capacity - cpu_used)
+                    available_mem = max(0, mem_capacity - mem_used)
+                    available_gpu = max(0, gpu_capacity - gpu_used)
+                    server_resource_usage[node_id] = {
+                        "gpu": available_gpu,
+                        "cpu": available_cpu,
+                        "memory": available_mem
+                    }
             else:
                 # Fallback: calculate from scratch if cluster_state not available
                 for node_id in node_info:
@@ -244,11 +251,11 @@ class JobPlacement(object):
                         node_id, node_info[node_id], gpu_df, active_jobs
                     )
             for idx, job_tuple in enumerate(jobs_this_round):
-                    job_id, job_info = job_tuple
-                    job = active_jobs[job_id]
-                    
-                    if job.get("is_running", False):
-                        continue  # Skip already running jobs
+                job_id, job_info = job_tuple
+                job = active_jobs[job_id]
+                
+                if job.get("is_running", False):
+                    continue  # Skip already running jobs
                     
                     # Get job demand vector [gpu_deficit, cpu_deficit, mem_deficit, sspeed_deficit]
                     gpu_demand = job_info.get("job_gpu_demand", 0)
@@ -265,19 +272,28 @@ class JobPlacement(object):
                     if job_gpu_deficit <= 0 and actual_allocated_gpus > 0:
                         continue
                     
-                    # If num_GPUs field doesn't match actual allocation, reset it
-                    if job.get("num_GPUs", 0) != actual_allocated_gpus:
-                        job["num_GPUs"] = actual_allocated_gpus
+                    
+                    # If num_GPUs_allocated field doesn't match actual allocation, reset it
+                    if job.get("num_GPUs_allocated", 0) != actual_allocated_gpus:
+                        job["num_GPUs_allocated"] = actual_allocated_gpus
                         job_gpu_deficit = gpu_demand - actual_allocated_gpus
                     
-                    demand_vec = [job_gpu_deficit,job_gpu_deficit*3,job_gpu_deficit*62.5,0]
+                    # Calculate CPU and memory deficit
+                    cpu_demand = job_info.get("job_cpu_demand", job_info.get("job_cpu_demand_orig", 0))
+                    mem_demand = job_info.get("job_mem_demand", job_info.get("job_mem_demand_orig", 0))
+                    sspeed_demand = job_info.get("job_sspeed_demand", job_info.get("job_sspeed_demand_orig", 0))
+                    
+                    demand_vec = [
+                        job_gpu_deficit,
+                        cpu_demand - job.get("cpus_allocated", 0),
+                        mem_demand - job.get("mem_allocated", 0),
+                        sspeed_demand - job.get("sspeed_allocated", 0)
+                    ]
                     placement, found, res_map, updated_server_resource_usage = self._synergy_find_placement(
                         job_info, node_info, gpu_df, server_resource_usage, active_jobs,
                         demand_vec[0], demand_vec[1], demand_vec[2]
                     )
-                    
-                    print(f"FIFO: Job {job_id}: _synergy_find_placement returned found={found}, placement_len={len(placement) if placement else 0}")
-                    
+
                     # Update server_resource_usage if provided
                     if found and updated_server_resource_usage:
                         server_resource_usage = updated_server_resource_usage
@@ -285,29 +301,40 @@ class JobPlacement(object):
                     if found:
                         # Validate placement: must have at least one GPU
                         if not placement or len(placement) == 0:
-                            print(f"Job {job_id}: Placement found but placement is empty, skipping")
                             break
                         
-                        # Store GPU placement
-                        job_to_launch[job_id] = placement
+                        # Group GPUs by node for better organization
+                        node_gpu_map = group_gpus_by_node(placement, gpu_df)
+                        
+                        # Store placement with node information
+                        # Format: {job_id: {'nodes': {node_id: [gpu_ids]}, 'gpus': [all_gpu_ids]}}
+                        job_to_launch[job_id] = {
+                            'nodes': node_gpu_map,  # Node-level placement: {node_id: [gpu_ids]}
+                            'gpus': placement       # All GPU IDs (for backward compatibility)
+                        }
+                        
                         # Store res_map in active_jobs for later use by job.allocate()
                         active_jobs[job_id]["res_map"] = res_map
                         
                         # Update job state with allocated resources (critical for metrics calculation)
                         actual_gpu_count = len(placement) if placement else 0
-                        active_jobs[job_id]["num_GPUs"] = actual_gpu_count
-                        active_jobs[job_id]["cpus"] = sum(r.get("cpu", 0) for r in res_map.values()) if res_map else 0
-                        active_jobs[job_id]["mem"] = sum(r.get("mem", 0) for r in res_map.values()) if res_map else 0
-                        active_jobs[job_id]["sspeed"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
+                        active_jobs[job_id]["num_GPUs_allocated"] = actual_gpu_count
+                        active_jobs[job_id]["cpus_allocated"] = sum(r.get("cpu", 0) for r in res_map.values()) if res_map else 0
+                        active_jobs[job_id]["mem_allocated"] = sum(r.get("mem", 0) for r in res_map.values()) if res_map else 0
+                        active_jobs[job_id]["sspeed_allocated"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
                         
                         # Update tput based on allocated CPU and memory
-                        allocated_cpus = active_jobs[job_id]["cpus"]
-                        allocated_mem = active_jobs[job_id]["mem"]
+                        allocated_cpus = active_jobs[job_id]["cpus_allocated"]
+                        allocated_mem = active_jobs[job_id]["mem_allocated"]
                         tput_value = get_tput_from_job_dict(active_jobs[job_id], allocated_cpus, allocated_mem)
                         if tput_value is not None and tput_value > 0:
                             active_jobs[job_id]["tput"] = tput_value
+                        
+                        # Note: Do NOT update cluster_state.server_resource_usage here
+                        # Resource usage is updated in blox_manager.exec_jobs() via _update_server_resource_usage()
+                        # Updating here would cause duplicate counting since exec_jobs() also updates it
                     elif not found:
-                         for rev_idx in range(1, len(active_jobs) - idx):
+                        for rev_idx in range(1, len(active_jobs) - idx):
                             potential_job_to_terminate = active_jobs[
                                 jobs_this_round[-rev_idx][0]
                             ]
@@ -332,28 +359,38 @@ class JobPlacement(object):
                                     if not placement or len(placement) == 0:
                                         continue  # Try next lower priority job
                                     
-                                    # Store GPU placement
-                                    job_to_launch[job_id] = placement
+                                    # Group GPUs by node for better organization
+                                    node_gpu_map = group_gpus_by_node(placement, gpu_df)
+                                    
+                                    # Store placement with node information
+                                    # Format: {job_id: {'nodes': {node_id: [gpu_ids]}, 'gpus': [all_gpu_ids]}}
+                                    job_to_launch[job_id] = {
+                                        'nodes': node_gpu_map,  # Node-level placement: {node_id: [gpu_ids]}
+                                        'gpus': placement       # All GPU IDs (for backward compatibility)
+                                    }
+                                    
                                     # Store res_map in active_jobs for later use by job.allocate()
                                     active_jobs[job_id]["res_map"] = res_map
                                     
                                     # Update job state with allocated resources (critical for metrics calculation)
                                     actual_gpu_count = len(placement) if placement else 0
-                                    active_jobs[job_id]["num_GPUs"] = actual_gpu_count
-                                    active_jobs[job_id]["cpus"] = sum(r.get("cpu", 0) for r in res_map.values()) if res_map else 0
-                                    active_jobs[job_id]["mem"] = sum(r.get("mem", 0) for r in res_map.values()) if res_map else 0
-                                    active_jobs[job_id]["sspeed"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
+                                    active_jobs[job_id]["num_GPUs_allocated"] = actual_gpu_count
+                                    active_jobs[job_id]["cpus_allocated"] = sum(r.get("cpu", 0) for r in res_map.values()) if res_map else 0
+                                    active_jobs[job_id]["mem_allocated"] = sum(r.get("mem", 0) for r in res_map.values()) if res_map else 0
+                                    active_jobs[job_id]["sspeed_allocated"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
                                     
                                     # Update tput based on allocated CPU and memory
-
-                                    allocated_cpus = active_jobs[job_id]["cpus"]
-                                    allocated_mem = active_jobs[job_id]["mem"]
+                                    allocated_cpus = active_jobs[job_id]["cpus_allocated"]
+                                    allocated_mem = active_jobs[job_id]["mem_allocated"]
                                     tput_value = get_tput_from_job_dict(active_jobs[job_id], allocated_cpus, allocated_mem)
                                     if tput_value is not None and tput_value > 0:
                                         active_jobs[job_id]["tput"] = tput_value
                                     
+                                    # Note: Do NOT update cluster_state.server_resource_usage here
+                                    # Resource usage is updated in blox_manager.exec_jobs() via _update_server_resource_usage()
+                                    # Updating here would cause duplicate counting since exec_jobs() also updates it
+                                    
                                     break  # Successfully placed, exit the termination loop
-            print("job_to_launch",job_to_launch)
             return (jobs_to_terminate, job_to_launch)
 
     def _gpu_normalized_vector(self, vector: list) -> list:
@@ -364,8 +401,6 @@ class JobPlacement(object):
         Returns:
             Normalized vector (per-GPU)
         """
-        if not vector or len(vector) == 0 or vector[0] == 0:
-            return [1.0] + [0.0] * (len(vector) - 1) if len(vector) > 1 else [1.0]
         return [item / vector[0] for item in vector]
 
     def _fits_in_server(
@@ -382,21 +417,26 @@ class JobPlacement(object):
         Returns:
             bool indicating if the demand fits
         """
-        if not norm_demand_vector or len(norm_demand_vector) < 3:
-            return False
         
         available = server_resource_usage.get(node_id, {})
+        if not available:
+            return False
+        
         # Check if server has enough resources for at least one GPU
         # norm_demand_vector is per-GPU normalized, so we check for 1 GPU worth
-        gpu_req = norm_demand_vector[0] if norm_demand_vector[0] > 0 else 1
-        cpu_req = norm_demand_vector[1] if len(norm_demand_vector) > 1 else 0
-        mem_req = norm_demand_vector[2] if len(norm_demand_vector) > 2 else 0
+        gpu_req = norm_demand_vector[0] 
+        cpu_req = norm_demand_vector[1]
+        mem_req = norm_demand_vector[2] 
         
-        return (
-            available.get("gpu", 0) >= gpu_req and
-            available.get("cpu", 0) >= cpu_req and
-            available.get("memory", 0) >= mem_req
-        )
+        available_gpu = available.get("gpu", 0)
+        available_cpu = available.get("cpu", 0)
+        available_mem = available.get("memory", 0)
+        gpu_fits = available_gpu >= gpu_req
+        cpu_fits = available_cpu >= cpu_req
+        mem_fits = available_mem >= mem_req
+        fits = gpu_fits and cpu_fits and mem_fits
+        
+        return fits
 
     def _build_alloc_map(self, norm_demand_vector: list) -> dict:
         """
@@ -406,14 +446,11 @@ class JobPlacement(object):
         Returns:
             Dictionary with resource allocations for one GPU
         """
-        if not norm_demand_vector or len(norm_demand_vector) < 3:
-            return {"gpu": 1, "cpu": 0, "mem": 0, "sspeed": 0}
-        
         return {
-            "gpu": int(norm_demand_vector[0]) if norm_demand_vector[0] > 0 else 1,
-            "cpu": int(norm_demand_vector[1]) if len(norm_demand_vector) > 1 else 0,
-            "mem": float(norm_demand_vector[2]) if len(norm_demand_vector) > 2 else 0,
-            "sspeed": float(norm_demand_vector[3]) if len(norm_demand_vector) > 3 else 0
+            "gpu": int(norm_demand_vector[0]),
+            "cpu": int(norm_demand_vector[1]),
+            "mem": float(norm_demand_vector[2]),
+            "sspeed": float(norm_demand_vector[3]) 
         }
 
     def _cumulative_map(self, map1: dict, map2: dict) -> dict:
@@ -432,76 +469,6 @@ class JobPlacement(object):
             "sspeed": map1.get("sspeed", 0) + map2.get("sspeed", 0)
         }
 
-    def _top_synergy_gpus_placement(
-        self, norm_demand_vector: list, num_gpus: int, 
-        free_gpus_dict: dict, server_resource_usage: dict, 
-        node_info: dict
-    ) -> Tuple[List[int], dict]:
-        """
-        Returns GPUs and allocation map using priority queue (least free GPUs first).
-        Args:
-            norm_demand_vector: Per-GPU normalized demand vector
-            num_gpus: Number of GPUs needed
-            free_gpus_dict: Dictionary of free GPUs by node
-            server_resource_usage: Current server resource usage
-            node_info: Server information dictionary
-        Returns:
-            (list of GPU IDs, res_map dictionary) or (None, None) if not enough GPUs
-        """
-        gpus_to_allocate = []
-        res_map = {}
-        
-        # Create priority queue: (num_free_gpus, node_id)
-        # Use negative for min-heap behavior (we want least free GPUs first)
-        pq = [(len(gpus), node_id) for node_id, gpus in free_gpus_dict.items() if len(gpus) > 0]
-        heapq.heapify(pq)
-        
-        # Track remaining GPUs per server
-        server_gpus_remaining = {node_id: list(gpus) for node_id, gpus in free_gpus_dict.items()}
-        
-        while len(gpus_to_allocate) < num_gpus and len(pq) > 0:
-            _, node_id = heapq.heappop(pq)
-            
-            # Check if this server can fit the demand
-            fits = self._fits_in_server(norm_demand_vector, node_id, server_resource_usage, node_info)
-            if not fits:
-                available = server_resource_usage.get(node_id, {})
-                print(f"  _top_synergy_gpus_placement: Server {node_id} doesn't fit: available={available}, norm_demand={norm_demand_vector}")
-            
-            if fits:
-                gpus = server_gpus_remaining.get(node_id, [])
-                if len(gpus) > 0:
-                    # Take one GPU from this server
-                    gpu_id = gpus.pop(0)
-                    gpus_to_allocate.append(gpu_id)
-                    
-                    # Build allocation map for this GPU
-                    server_alloc_map = self._build_alloc_map(norm_demand_vector)
-                    
-                    # Update res_map (cumulative)
-                    server_wrapper = ServerWrapper(node_id)
-                    if server_wrapper not in res_map:
-                        res_map[server_wrapper] = server_alloc_map
-                    else:
-                        res_map[server_wrapper] = self._cumulative_map(
-                            res_map[server_wrapper], server_alloc_map
-                        )
-                    
-                    # Update server resource usage (temporarily hold resources)
-                    if node_id in server_resource_usage:
-                        server_resource_usage[node_id]["gpu"] -= server_alloc_map.get("gpu", 1)
-                        server_resource_usage[node_id]["cpu"] -= server_alloc_map.get("cpu", 0)
-                        server_resource_usage[node_id]["memory"] -= server_alloc_map.get("mem", 0)
-                    
-                    # If server still has GPUs, push back to queue
-                    if len(gpus) > 0:
-                        heapq.heappush(pq, (len(gpus), node_id))
-        
-        if len(gpus_to_allocate) < num_gpus:
-            print(f"  _top_synergy_gpus_placement: Not enough GPUs allocated: got {len(gpus_to_allocate)}, needed {num_gpus}")
-            return None, None
-        
-        return gpus_to_allocate, res_map
 
     def _synergy_find_placement(
         self, job_info: dict, node_info: dict, gpu_df: pd.DataFrame,
@@ -525,20 +492,14 @@ class JobPlacement(object):
         """
         # If GPU demand is 0, cannot place (job already has all needed GPUs or invalid demand)
         if gpu_demand <= 0:
-            print(f"  _synergy_find_placement: GPU demand is 0, returning False")
             return ([], False, {}, server_resource_usage)
         
         free_gpus_dict = find_free_GPUs(gpu_df)
         total_free_gpus = sum(len(gpus) for gpus in free_gpus_dict.values())
-        print(f"  _synergy_find_placement: gpu_demand={gpu_demand}, total_free_gpus={total_free_gpus}, free_gpus_dict={free_gpus_dict}")
-        
         sspeed_demand = job_info.get("job_sspeed_demand", job_info.get("job_sspeed_demand_orig", 0))
         
         # Build demand vector [gpu, cpu, mem, sspeed]
         demand_vector = [gpu_demand, cpu_demand, mem_demand, sspeed_demand]
-        
-        # Normalize demand vector by GPU (per-GPU demand)
-        job_demand_vector_gpu_norm = self._gpu_normalized_vector(demand_vector)
         
         # Check if job prefers consolidation
         prefers_consolidation = job_info.get("placement_preference") == "consolidated" or \
@@ -546,7 +507,6 @@ class JobPlacement(object):
         
         # If job prefers consolidation, try to find a single server that fits
         if prefers_consolidation:
-            print(f"  _synergy_find_placement: Job prefers consolidation, trying consolidated placement")
             candidates = []
             for node_id, gpus in free_gpus_dict.items():
                 if len(gpus) >= gpu_demand:
@@ -557,12 +517,8 @@ class JobPlacement(object):
                     fits = (available.get("gpu", 0) >= gpu_demand and
                             available.get("cpu", 0) >= total_cpu_needed and
                             available.get("memory", 0) >= total_mem_needed)
-                    if not fits:
-                        print(f"  _synergy_find_placement: Server {node_id} doesn't fit consolidated: available={available}, needed=(gpu={gpu_demand}, cpu={total_cpu_needed}, mem={total_mem_needed})")
                     if fits:
                         candidates.append((len(gpus), node_id))
-            
-            print(f"  _synergy_find_placement: Found {len(candidates)} candidates for consolidated placement")
             if len(candidates) > 0:
                 # Choose server with minimum free GPUs (to reduce fragmentation)
                 _, target_node = min(candidates, key=lambda x: x[0])
@@ -571,28 +527,25 @@ class JobPlacement(object):
                     placement, gpu_df, node_info, gpu_demand, cpu_demand, mem_demand, sspeed_demand
                 )
                 # Update GPU state and server resource usage immediately
-                mark_gpu_in_use(gpu_df, placement, job_info.get("job_id"))
-                # Update server_resource_usage
-                if target_node in server_resource_usage:
-                    server_resource_usage[target_node]["gpu"] -= gpu_demand
-                    server_resource_usage[target_node]["cpu"] -= cpu_demand
-                    server_resource_usage[target_node]["memory"] -= mem_demand
+                # mark_gpu_in_use will update both gpu_df and server_resource_usage if res_map is provided
+                mark_gpu_in_use(gpu_df, placement, job_info.get("job_id"), res_map=res_map, server_resource_usage=server_resource_usage)
                 return (placement, True, res_map, server_resource_usage)
         
         # If cannot be consolidated or does not prefer one, use priority queue placement
-        print(f"  _synergy_find_placement: Trying priority queue placement, gpu_demand={gpu_demand}, cpu_demand={cpu_demand}, mem_demand={mem_demand}")
-        print(f"  _synergy_find_placement: server_resource_usage={server_resource_usage}")
+        # Normalize demand vector by GPU (per-GPU demand)        
+        gpu_demand_norm = self._gpu_normalized_vector(demand_vector)
         gpus_to_allocate, res_map = self._top_synergy_gpus_placement(
-            job_demand_vector_gpu_norm, gpu_demand, free_gpus_dict,
+            gpu_demand_norm, gpu_demand, free_gpus_dict,
             server_resource_usage, node_info
         )
         
         if gpus_to_allocate is None:
-            print(f"  _synergy_find_placement: _top_synergy_gpus_placement returned None (not enough GPUs or resources)")
             return ([], False, {}, server_resource_usage)
         
         # Update GPU state immediately
-        mark_gpu_in_use(gpu_df, gpus_to_allocate, job_info.get("job_id"))
+        # Note: server_resource_usage is already updated in _top_synergy_gpus_placement during allocation
+        # So we only need to mark GPUs as in use here
+        mark_gpu_in_use(gpu_df, gpus_to_allocate, job_info.get("job_id"), res_map=res_map, server_resource_usage=server_resource_usage)
         
         # Convert ServerWrapper keys in res_map to match create_res_map_from_placement format
         # The res_map from _top_synergy_gpus_placement already has ServerWrapper keys
@@ -600,6 +553,93 @@ class JobPlacement(object):
         
         return (gpus_to_allocate, True, res_map, server_resource_usage)
 
+    def _top_synergy_gpus_placement(
+        self, demand_vector_norm: list, num_gpus: int, 
+        free_gpus_dict: dict, server_resource_usage: dict, 
+        node_info: dict
+    ) -> Tuple[List[int], dict]:
+        """
+        Returns GPUs and allocation map using priority queue (least free GPUs first).
+        Args:
+            norm_demand_vector: Per-GPU normalized demand vector
+            num_gpus: Number of GPUs needed
+            free_gpus_dict: Dictionary of free GPUs by node
+            server_resource_usage: Current server resource usage
+            node_info: Server information dictionary
+        Returns:
+            (list of GPU IDs, res_map dictionary) or (None, None) if not enough GPUs
+        """
+        gpus_to_allocate = []
+        res_map = {}
+        
+        # Track remaining GPUs per server (dictionary mapping node_id to list of GPU IDs)
+        # Only include nodes that exist in server_resource_usage
+        server_gpus_remaining = {
+            node_id: list(gpus) 
+            for node_id, gpus in free_gpus_dict.items() 
+            if len(gpus) > 0  # Has remaining GPUs
+            and node_id in server_resource_usage  # Node exists in resource usage
+        }
+        
+        # Create priority queue: (num_free_gpus, node_id)
+        # Use min-heap behavior (we want least free GPUs first)
+        pq = [(len(gpus), node_id) for node_id, gpus in server_gpus_remaining.items()]
+        heapq.heapify(pq)
+        
+        while len(gpus_to_allocate) < num_gpus and len(pq) > 0:
+            _, node_id = heapq.heappop(pq)
+            gpus = server_gpus_remaining.get(node_id, [])
+            
+            # Check if this server can fit the demand (at least one GPU worth of resources)
+            fits = self._fits_in_server(demand_vector_norm, node_id, server_resource_usage, node_info)
+            if len(gpus) > 0 and fits:
+                # Take one GPU from this server
+                gpu_id = gpus.pop()
+                gpus_to_allocate.append(gpu_id)
+                
+                # Temporarily hold resources (update server_resource_usage)
+                server_alloc_map = self._build_alloc_map(demand_vector_norm)
+                if node_id in server_resource_usage:
+                    server_resource_usage[node_id]["gpu"] -= server_alloc_map.get("gpu", 0)
+                    server_resource_usage[node_id]["cpu"] -= server_alloc_map.get("cpu", 0)
+                    server_resource_usage[node_id]["memory"] -= server_alloc_map.get("mem", 0)
+                
+                # Update res_map (cumulative)
+                server_wrapper = ServerWrapper(node_id)
+                if server_wrapper not in res_map:
+                    res_map[server_wrapper] = server_alloc_map
+                else:
+                    res_map[server_wrapper] = self._cumulative_map(
+                        res_map[server_wrapper], server_alloc_map
+                    )
+                
+                # Update server_gpus_remaining
+                server_gpus_remaining[node_id] = gpus
+                
+                # If server still has GPUs, push back to queue
+                if len(gpus) > 0:
+                    heapq.heappush(pq, (len(gpus), node_id))
+        
+        # Release held resources if allocation failed (rollback)
+        if len(gpus_to_allocate) < num_gpus:
+            # print(f"[PLACEMENT] _top_synergy_gpus_placement: Failed to allocate {num_gpus} GPUs, only got {len(gpus_to_allocate)}")
+            # print(f"  Demand per GPU: GPU={demand_vector_norm[0]}, CPU={demand_vector_norm[1]:.2f}, Memory={demand_vector_norm[2]:.2f}")
+            # print(f"  Available servers with free GPUs: {len(server_gpus_remaining)}")
+            # for node_id, gpus in server_gpus_remaining.items():
+            #     available = server_resource_usage.get(node_id, {})
+            #     fits = self._fits_in_server(demand_vector_norm, node_id, server_resource_usage, node_info)
+            #     print(f"    Node {node_id}: {len(gpus)} free GPUs, Available resources - GPU={available.get('gpu', 0)}, CPU={available.get('cpu', 0):.2f}, Memory={available.get('memory', 0):.2f}, Fits={fits}")
+            # Rollback: restore resources for allocated GPUs
+            for server_wrapper, resources in res_map.items():
+                node_id = server_wrapper.node_id if hasattr(server_wrapper, 'node_id') else server_wrapper.server_id
+                if node_id in server_resource_usage:
+                    server_resource_usage[node_id]["gpu"] += resources.get("gpu", 0)
+                    server_resource_usage[node_id]["cpu"] += resources.get("cpu", 0)
+                    server_resource_usage[node_id]["memory"] += resources.get("mem", 0)
+            return None, None
+        
+        return gpus_to_allocate, res_map
+        
 
     def _make_fair_share(self, job_info: dict, demand_vec: list) -> Tuple[bool, list]:
         """
@@ -732,10 +772,10 @@ class JobPlacement(object):
             
             # Get allocation vector [gpu, cpu, mem, sspeed, ...]
             alloc_vec = [
-                j.get("num_GPUs", 0),
-                j.get("cpus", 0),
-                j.get("mem", 0),
-                j.get("sspeed", 0)
+                j.get("num_GPUs_allocated", 0),
+                j.get("cpus_allocated", 0),
+                j.get("mem_allocated", 0),
+                j.get("sspeed_allocated", 0)
             ]
             
             # Calculate ratios
@@ -767,10 +807,10 @@ class JobPlacement(object):
             
             # Get job's total allocation vector
             job_alloc_vector = [
-                j.get("num_GPUs", 0),
-                j.get("cpus", 0),
-                j.get("mem", 0),
-                j.get("sspeed", 0)
+                j.get("num_GPUs_allocated", 0),
+                j.get("cpus_allocated", 0),
+                j.get("mem_allocated", 0),
+                j.get("sspeed_allocated", 0)
             ]
             
             # Calculate GPU share: GPUs on this server / total GPUs
@@ -929,10 +969,10 @@ class JobPlacement(object):
                         j = active_jobs[j_id]
                         peer_jobs_original_state[j_id] = {
                             "res_map": copy.deepcopy(j.get("res_map", {})),
-                            "num_GPUs": j.get("num_GPUs", 0),
-                            "cpus": j.get("cpus", 0),
-                            "mem": j.get("mem", 0),
-                            "sspeed": j.get("sspeed", 0),
+                            "num_GPUs_allocated": j.get("num_GPUs_allocated", 0),
+                            "cpus_allocated": j.get("cpus_allocated", 0),
+                            "mem_allocated": j.get("mem_allocated", 0),
+                            "sspeed_allocated": j.get("sspeed_allocated", 0),
                             "is_running": j.get("is_running", False),
                             "gpus": find_gpus_matching_JobID(j_id, gpu_df)
                         }
@@ -982,7 +1022,6 @@ class JobPlacement(object):
                     if j_id not in jobs_to_terminate:
                         jobs_to_terminate.append(j_id)
                     j["is_running"] = False
-                    
                     # Get peer job's demand vector (after deallocation, deficit = demand)
                     peer_demand_vec = [
                         j.get("job_gpu_demand", 0),
@@ -1013,29 +1052,16 @@ class JobPlacement(object):
                     
                     # Reallocate peer job with updated res_map
                     if peer_res_map:
-                        # Mark GPUs as in use
-                        mark_gpu_in_use(gpu_df, j_gpus, j_id)
-                        
-                        # Update server resource usage
-                        for server_key, resources in peer_res_map.items():
-                            if hasattr(server_key, 'node_id'):
-                                serv_id = server_key.node_id
-                            elif isinstance(server_key, int):
-                                serv_id = server_key
-                            else:
-                                continue
-                            
-                            if serv_id in server_resource_usage:
-                                server_resource_usage[serv_id]["gpu"] -= resources.get("gpu", 0)
-                                server_resource_usage[serv_id]["cpu"] -= resources.get("cpu", 0)
-                                server_resource_usage[serv_id]["memory"] -= resources.get("mem", 0)
+                        # Mark GPUs as in use and update server resource usage
+                        # mark_gpu_in_use will update both gpu_df and server_resource_usage if res_map is provided
+                        mark_gpu_in_use(gpu_df, j_gpus, j_id, res_map=peer_res_map, server_resource_usage=server_resource_usage)
                         
                         # Update job state
                         j["res_map"] = peer_res_map
-                        j["num_GPUs"] = len(j_gpus)
-                        j["cpus"] = sum(r.get("cpu", 0) for r in peer_res_map.values())
-                        j["mem"] = sum(r.get("mem", 0) for r in peer_res_map.values())
-                        j["sspeed"] = sum(r.get("sspeed", 0) for r in peer_res_map.values())
+                        j["num_GPUs_allocated"] = len(j_gpus)
+                        j["cpus_allocated"] = sum(r.get("cpu", 0) for r in peer_res_map.values())
+                        j["mem_allocated"] = sum(r.get("mem", 0) for r in peer_res_map.values())
+                        j["sspeed_allocated"] = sum(r.get("sspeed", 0) for r in peer_res_map.values())
                         j["is_running"] = True
                 
                 # Try to allocate current job after reallocating peers
@@ -1092,27 +1118,18 @@ class JobPlacement(object):
                         
                         # Restore original allocation
                         if original_gpus and original_res_map:
+                            # Note: When restoring, we need to add resources back (opposite of allocation)
+                            # So we manually restore resources first, then mark GPUs
+                            
+                            # Mark GPUs as in use (but don't update server_resource_usage again since we already restored)
                             mark_gpu_in_use(gpu_df, original_gpus, j_id)
-                            # Restore resources in server_resource_usage
-                            for server_key, resources in original_res_map.items():
-                                if hasattr(server_key, 'node_id'):
-                                    serv_id = server_key.node_id
-                                elif isinstance(server_key, int):
-                                    serv_id = server_key
-                                else:
-                                    continue
-                                
-                                if serv_id in server_resource_usage:
-                                    server_resource_usage[serv_id]["gpu"] -= resources.get("gpu", 0)
-                                    server_resource_usage[serv_id]["cpu"] -= resources.get("cpu", 0)
-                                    server_resource_usage[serv_id]["memory"] -= resources.get("mem", 0)
                             
                             # Restore job state
                             j["res_map"] = copy.deepcopy(original_res_map)
-                            j["num_GPUs"] = original_state["num_GPUs"]
-                            j["cpus"] = original_state["cpus"]
-                            j["mem"] = original_state["mem"]
-                            j["sspeed"] = original_state["sspeed"]
+                            j["num_GPUs_allocated"] = original_state["num_GPUs_allocated"]
+                            j["cpus_allocated"] = original_state["cpus_allocated"]
+                            j["mem_allocated"] = original_state["mem_allocated"]
+                            j["sspeed_allocated"] = original_state["sspeed_allocated"]
                             j["is_running"] = original_state["is_running"]
                             
                             # Remove from jobs_to_terminate if it was added
@@ -1136,7 +1153,7 @@ class JobPlacement(object):
         boolean indicating if we found placement
         """
         # if there is a machine with exact required GPUs
-        numGPUs_needed = job_param["num_GPUs"]
+        numGPUs_needed = job_param.get("job_gpu_demand", job_param.get("num_GPUs", 0))
         for node in free_gpus:
             if len(free_gpus[node]) == numGPUs_needed:
                 # found a perfect match
@@ -1169,7 +1186,7 @@ class JobPlacement(object):
         list of GPU IDs on which to place the job
         boolean indicating if we found placement
         """
-        numGPUs_needed = job_param["num_GPUs"]
+        numGPUs_needed = job_param.get("job_gpu_demand", job_param.get("num_GPUs", 0))
         gpus_for_job = list()
         found = False
         for node in free_gpus:
@@ -1182,7 +1199,7 @@ class JobPlacement(object):
         else:
             return ([], False)
 
-    # Pandas Utilities
+# Pandas Utilities
 
 def find_gpus_matching_JobID(job_id: int, gpu_df: pd.DataFrame) -> list:
     """
@@ -1191,7 +1208,7 @@ def find_gpus_matching_JobID(job_id: int, gpu_df: pd.DataFrame) -> list:
     return gpu_df.loc[gpu_df["JOB_IDS"] == job_id]["GPU_ID"].tolist()
 
 
-    # Find free GPUs
+# Find free GPUs
 
 def find_free_GPUs(gpu_df: pd.DataFrame) -> dict:
     """
@@ -1207,6 +1224,32 @@ def find_free_GPUs(gpu_df: pd.DataFrame) -> dict:
         .apply(list)
         .to_dict()
     )
+
+
+def group_gpus_by_node(gpu_ids: List[int], gpu_df: pd.DataFrame) -> Dict[int, List[int]]:
+    """
+    Group GPU IDs by their node IDs
+    
+    Args:
+        gpu_ids: List of GPU IDs
+        gpu_df: GPU dataframe
+    Returns:
+        Dictionary mapping node_id to list of GPU IDs on that node
+        Format: {node_id: [gpu_id1, gpu_id2, ...]}
+    """
+    if not gpu_ids:
+        return {}
+    
+    node_gpu_map = {}
+    for gpu_id in gpu_ids:
+        node_row = gpu_df.loc[gpu_df["GPU_ID"] == gpu_id]
+        if not node_row.empty:
+            node_id = node_row["Node_ID"].iloc[0]
+            if node_id not in node_gpu_map:
+                node_gpu_map[node_id] = []
+            node_gpu_map[node_id].append(gpu_id)
+    
+    return node_gpu_map
 
 
 def find_free_GPUs_by_type(gpu_df: pd.DataFrame, gpu_type: str) -> dict:
@@ -1227,20 +1270,57 @@ def find_free_GPUs_by_type(gpu_df: pd.DataFrame, gpu_type: str) -> dict:
 
 
 # Mark a GPU in use
-def mark_gpu_in_use(gpu_df: pd.DataFrame, gpu_id: List[int], job_id: int) -> None:
+def mark_gpu_in_use(
+    gpu_df: pd.DataFrame, 
+    gpu_id: List[int], 
+    job_id: int,
+    res_map: dict = None,
+    server_resource_usage: dict = None
+) -> None:
     """
-    Find the GPU ID and mark it in use. After deciding to schedule something on
-    it.
+    Find the GPU ID and mark it in use. After deciding to schedule something on it.
+    Optionally update server resource usage if res_map is provided (similar to _server.allocate(res_map[_server])).
+    
     Args:
-    gpu_df : DataFrame consisting of information about GPUs
-    gpu_id : GPU to mark busy
+        gpu_df: DataFrame consisting of information about GPUs
+        gpu_id: GPU IDs to mark busy
     job_id: Job being scheduled on GPU with id=gpu_id
+        res_map: Optional resource map {ServerWrapper: {'cpu': int, 'mem': float, 'gpu': int, 'sspeed': float}}
+                 If provided, will update server_resource_usage similar to _server.allocate(res_map[_server])
+        server_resource_usage: Optional dictionary to update with resource usage
+                              Format: {node_id: {"gpu": int, "cpu": float, "memory": float}}
 
     Returns:
     None
-    In place modifies the gpu_df
+    In place modifies the gpu_df and optionally server_resource_usage
     """
+    # Mark GPUs as in use
     gpu_df.loc[gpu_df["GPU_ID"].isin(gpu_id), ["JOB_IDS", "IN_USE"]] = job_id, True
+    
+    # Update server resource usage if res_map is provided (similar to _server.allocate(res_map[_server]))
+    if res_map is not None and server_resource_usage is not None:
+        for server_key, resources in res_map.items():
+            # Extract node_id from ServerWrapper or dict key
+            if hasattr(server_key, 'node_id'):
+                node_id = server_key.node_id
+            elif hasattr(server_key, 'server_id'):
+                node_id = server_key.server_id
+            elif isinstance(server_key, int):
+                node_id = server_key
+            else:
+                continue
+            
+            if node_id in server_resource_usage:
+                # Update server resource usage (similar to _server.allocate(res_map[_server]))
+                # Subtract allocated resources from available resources
+                cpu_allocated = resources.get("cpu", 0)
+                mem_allocated = resources.get("mem", 0)
+                gpu_allocated = resources.get("gpu", 0)
+                
+                server_resource_usage[node_id]["gpu"] = server_resource_usage[node_id].get("gpu", 0) - gpu_allocated
+                server_resource_usage[node_id]["cpu"] =  server_resource_usage[node_id].get("cpu", 0) - cpu_allocated
+                server_resource_usage[node_id]["memory"] =  server_resource_usage[node_id].get("memory", 0) - mem_allocated
+    
     return None
 
 
@@ -1385,6 +1465,16 @@ def get_server_available_resources(
         "memory": node_info.get("memoryCapacity", 0),
     }
     
+    # If CPU or memory capacity is 0 but GPU capacity > 0, calculate from GPU count
+    # This ensures CPU and memory are available if GPUs are available (proportional allocation)
+    if server_capacity["gpu"] > 0:
+        if server_capacity["cpu"] == 0:
+            # Default: at least 3 CPU cores per GPU
+            server_capacity["cpu"] = server_capacity["gpu"] * 3
+        if server_capacity["memory"] == 0:
+            # Default: at least 62.5 GB per GPU
+            server_capacity["memory"] = server_capacity["gpu"] * 62.5
+    
     # Calculate used resources
     used_resources = {"gpu": 0, "cpu": 0, "memory": 0}
     
@@ -1400,18 +1490,46 @@ def get_server_available_resources(
             # Get allocated resources for this job on this node
             # Note: This is a simplified calculation
             # In reality, we need to track per-node resource allocation
-            if job.get("is_running", False):
+            if job.get("is_running", False):  # Fixed: default should be False, not True
                 # Estimate based on job's GPU allocation on this node
                 job_gpus_on_node = len(node_gpus.loc[
                     (node_gpus["IN_USE"] == True) & (node_gpus["JOB_IDS"] == job_id)
                 ])
                 if job_gpus_on_node > 0:
-                    # Proportional allocation
-                    total_job_gpus = job.get("num_GPUs", 1)
-                    if total_job_gpus > 0:
-                        ratio = job_gpus_on_node / total_job_gpus
-                        used_resources["cpu"] += job.get("job_cpu_demand", 0) * ratio
-                        used_resources["memory"] += job.get("job_mem_demand", 0) * ratio
+                    # Use res_map if available (actual allocated resources), otherwise use proportional allocation
+                    res_map = job.get("res_map", {})
+                    if res_map:
+                        # Calculate actual allocated resources on this node from res_map
+                        for server_key, resources in res_map.items():
+                            # Extract node_id from ServerWrapper or dict key
+                            if hasattr(server_key, 'node_id'):
+                                res_node_id = server_key.node_id
+                            elif hasattr(server_key, 'server_id'):
+                                res_node_id = server_key.server_id
+                            elif isinstance(server_key, int):
+                                res_node_id = server_key
+                            else:
+                                continue
+                            
+                            if res_node_id == node_id:
+                                # Use actual allocated resources from res_map
+                                used_resources["cpu"] += resources.get("cpu", 0)
+                                used_resources["memory"] += resources.get("mem", 0)
+                                break
+                        else:
+                            # res_map exists but this node not found, use proportional allocation
+                            total_job_gpus = job.get("num_GPUs_allocated", 1)
+                            if total_job_gpus > 0:
+                                ratio = job_gpus_on_node / total_job_gpus
+                                used_resources["cpu"] += job.get("job_cpu_demand", 0) * ratio
+                                used_resources["memory"] += job.get("job_mem_demand", 0) * ratio
+                    else:
+                        # No res_map, use proportional allocation based on GPU count
+                        total_job_gpus = job.get("num_GPUs_allocated", 1)
+                        if total_job_gpus > 0:
+                            ratio = job_gpus_on_node / total_job_gpus
+                            used_resources["cpu"] += job.get("job_cpu_demand", 0) * ratio
+                            used_resources["memory"] += job.get("job_mem_demand", 0) * ratio
     
     # Calculate available resources
     available = {

@@ -358,7 +358,11 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         for key in keys_to_remove:
             new_job.pop(key)
 
-        new_job["num_GPUs"] = new_job["job_gpu_demand"]
+        # Initialize allocated resources to 0 (job hasn't been placed yet)
+        new_job["num_GPUs_allocated"] = 0
+        new_job["cpus_allocated"] = 0
+        new_job["mem_allocated"] = 0
+        new_job["sspeed_allocated"] = 0
         # new_job["params_to_track"] = [
         # "per_iter_time",
         # "attained_service",
@@ -491,7 +495,7 @@ def launch_server(args) -> grpc.Server:
             [
                 # "Tiresias",
                 # "Optimus",
-                "Fifo",
+                # "Fifo",
                 # "Las",
                 # "Srtf",
                 # "New",
