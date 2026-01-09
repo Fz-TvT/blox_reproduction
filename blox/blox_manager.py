@@ -88,6 +88,38 @@ class BloxManager(object):
         cluster_state.update(new_nodes)
         return new_nodes
 
+    def _convert_res_map_keys_to_node_id(self, res_map):
+        """
+        将 res_map 中的 ServerWrapper 键转换为 node_id
+        这样 res_map 就可以被 JSON 序列化。
+        
+        Args:
+            res_map: 资源映射字典，键可能是 ServerWrapper 对象或整数
+        
+        Returns:
+            转换后的 res_map,所有键都是整数 node_id
+        """
+        if not res_map:
+            return res_map
+        
+        converted_map = {}
+        for server_key, resources in res_map.items():
+            # 提取 node_id
+            if hasattr(server_key, 'node_id'):
+                node_id = server_key.node_id
+            elif hasattr(server_key, 'server_id'):
+                node_id = server_key.server_id
+            elif isinstance(server_key, int):
+                node_id = server_key
+            else:
+                # 如果无法提取 node_id，跳过这个条目
+                continue
+            
+            # 使用 node_id 作为键
+            converted_map[node_id] = resources
+        
+        return converted_map
+
     def _get_avg_jct(self, time_dict):
         """
         Fetch the avg jct from the dict
@@ -171,9 +203,14 @@ class BloxManager(object):
                                         self.time,
                                     ]
 
-                                    job_state.job_runtime_stats[jid] = copy.deepcopy(
-                                        job_state.active_jobs[jid]
-                                    )
+                                    # Deep copy job data and convert ServerWrapper keys in res_map to node_id
+                                    job_data = copy.deepcopy(job_state.active_jobs[jid])
+                                    # Convert ServerWrapper keys in res_map to node_id (int) for JSON serialization
+                                    if "res_map" in job_data and job_data["res_map"]:
+                                        job_data["res_map"] = self._convert_res_map_keys_to_node_id(
+                                            job_data["res_map"]
+                                        )
+                                    job_state.job_runtime_stats[jid] = job_data
                                     # track completion_time and submission_time as maintained in the Pollux Job object
 
                                 jid_to_terminate.append(jid)
@@ -422,7 +459,7 @@ class BloxManager(object):
         terminate_rank_0_ipaddr = list()
         terminate_ipaddr = list()
         terminate_simulation = list()
-        print(f"[DEBUG] exec_jobs: Jobs to terminate: {jobs_to_terminate}, Jobs to launch: {list(jobs_to_launch.keys()) if jobs_to_launch else []} (total: {len(jobs_to_launch)})")
+        print(f"[DEBUG] exec_jobs: Jobs to terminate: {jobs_to_terminate}, Jobs to launch: {list(jobs_to_launch.keys())}")
         print("Job IDs to terminate {}".format(jobs_to_terminate))
         for jid in jobs_to_terminate:
             # find ipaddresses for corresponding jobs to terminate
