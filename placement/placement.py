@@ -205,15 +205,17 @@ class JobPlacement(object):
                         for server, resources in res_map.items():
                             node_id = server.server_id if hasattr(server, 'server_id') else server
                             # print(f"  Node {node_id}: GPU={resources.get('gpu', 0)}, CPU={resources.get('cpu', 0)}, Memory={resources.get('mem', 0):.2f}GB")
-                    
-
-                # If still not found after timeout mechanism, continue to next job instead of breaking
-                # This allows other jobs to be placed even if this one fails
-                # print(f"[PLACEMENT] Job {job_id}: Placement not found - GPU demand: {gpu_demand}, CPU demand: {cpu_d}, Memory demand: {mem_d}")
-                # Print available resources for debugging
-                # for node_id in server_resource_usage:
-                #     available = server_resource_usage[node_id]
-                #     print(f"  Node {node_id}: Available - GPU={available.get('gpu', 0)}, CPU={available.get('cpu', 0):.2f}, Memory={available.get('memory', 0):.2f}")
+                else:
+                    # Placement not found - log why
+                    print(f"[PLACEMENT_FAILED] Job {job_id}: Cannot find placement - GPU demand: {gpu_d}, CPU demand: {cpu_d:.2f}, Memory demand: {mem_d:.2f}")
+                    # Print available resources for debugging
+                    total_available_gpu = sum(server_resource_usage[node_id].get('gpu', 0) for node_id in server_resource_usage)
+                    total_available_cpu = sum(server_resource_usage[node_id].get('cpu', 0) for node_id in server_resource_usage)
+                    total_available_mem = sum(server_resource_usage[node_id].get('memory', 0) for node_id in server_resource_usage)
+                    print(f"  Total available resources: GPU={total_available_gpu}, CPU={total_available_cpu:.2f}, Memory={total_available_mem:.2f}")
+                    for node_id in server_resource_usage:
+                        available = server_resource_usage[node_id]
+                        print(f"    Node {node_id}: GPU={available.get('gpu', 0)}, CPU={available.get('cpu', 0):.2f}, Memory={available.get('memory', 0):.2f}")
                 continue
             
             return (jobs_to_terminate, job_to_launch)
@@ -841,6 +843,76 @@ class JobPlacement(object):
         
         return jobs_to_realloc
 
+    def _rollback_peer_jobs(
+        self, 
+        peer_jobs_original_state: dict,
+        active_jobs: dict,
+        gpu_df: pd.DataFrame,
+        server_resource_usage: dict,
+        jobs_to_terminate: list
+    ) -> None:
+        """
+        回退 peer jobs 到原始状态
+        
+        Args:
+            peer_jobs_original_state: 保存的 peer jobs 原始状态字典
+            active_jobs: 活跃作业字典
+            gpu_df: GPU 数据框
+            server_resource_usage: 服务器资源使用情况字典
+            jobs_to_terminate: 待终止作业列表
+        """
+        for j_id, original_state in peer_jobs_original_state.items():
+            if j_id not in active_jobs:
+                continue
+            
+            j = active_jobs[j_id]
+            original_gpus = original_state["gpus"]
+            original_res_map = original_state["res_map"]
+            
+            # Free current allocation (fair-share allocation)
+            current_gpus = find_gpus_matching_JobID(j_id, gpu_df)
+            if current_gpus:
+                delete_job_by_id(gpu_df, j_id)
+                # Free resources in server_resource_usage
+                current_res_map = j.get("res_map", {})
+                if current_res_map:
+                    for server_key, resources in current_res_map.items():
+                        if hasattr(server_key, 'node_id'):
+                            serv_id = server_key.node_id
+                        elif isinstance(server_key, int):
+                            serv_id = server_key
+                        else:
+                            continue
+                        
+                        if serv_id in server_resource_usage:
+                            cpu_freed = resources.get('cpu', 0) if isinstance(resources, dict) else 0
+                            mem_freed = resources.get('mem', 0) if isinstance(resources, dict) else 0
+                            gpu_freed = resources.get('gpu', 0) if isinstance(resources, dict) else 0
+                            
+                            server_resource_usage[serv_id]["gpu"] += gpu_freed
+                            server_resource_usage[serv_id]["cpu"] += cpu_freed
+                            server_resource_usage[serv_id]["memory"] += mem_freed
+            
+            # Restore original allocation
+            if original_gpus and original_res_map:
+                # Note: When restoring, we need to add resources back (opposite of allocation)
+                # So we manually restore resources first, then mark GPUs
+                
+                # Mark GPUs as in use (but don't update server_resource_usage again since we already restored)
+                mark_gpu_in_use(gpu_df, original_gpus, j_id)
+                
+                # Restore job state
+                j["res_map"] = copy.deepcopy(original_res_map)
+                j["num_GPUs_allocated"] = original_state["num_GPUs_allocated"]
+                j["cpus_allocated"] = original_state["cpus_allocated"]
+                j["mem_allocated"] = original_state["mem_allocated"]
+                j["sspeed_allocated"] = original_state["sspeed_allocated"]
+                j["is_running"] = original_state["is_running"]
+                
+                # Remove from jobs_to_terminate if it was added
+                if j_id in jobs_to_terminate:
+                    jobs_to_terminate.remove(j_id)
+
     def _vector_to_map(self, demand_vec: list) -> dict:
         """
         Convert demand vector to resource map format.
@@ -944,7 +1016,6 @@ class JobPlacement(object):
                 job_gpu_deficit, available_gpus,
                 consolidate=job_info.get("prefers_consolidation", False)
             )
-            
             for serv, num_gpus_from_serv in server_handle_map.items():
                 # Get actual GPU list for this server
                 gpus = available_gpus.get(serv, [])[:num_gpus_from_serv]
@@ -956,7 +1027,6 @@ class JobPlacement(object):
                 ]
                 ratio = num_gpus_from_serv / job_gpu_deficit if job_gpu_deficit > 0 else 0
                 demand_vec_share = [res * ratio for res in demand_vec]
-                
                 # Reallocate peer jobs
                 jobs_to_realloc = self._reallocate_peer(
                     demand_vec_share, free_vec, serv, active_jobs, gpu_df
@@ -1084,57 +1154,10 @@ class JobPlacement(object):
                 # (rollback will happen after all servers are tried)
                 else:
                     # Allocation failed: rollback peer jobs to original state
-                    for j_id, original_state in peer_jobs_original_state.items():
-                        if j_id not in active_jobs:
-                            continue
-                        
-                        j = active_jobs[j_id]
-                        original_gpus = original_state["gpus"]
-                        original_res_map = original_state["res_map"]
-                        
-                        # Free current allocation (fair-share allocation)
-                        current_gpus = find_gpus_matching_JobID(j_id, gpu_df)
-                        if current_gpus:
-                            delete_job_by_id(gpu_df, j_id)
-                            # Free resources in server_resource_usage
-                            current_res_map = j.get("res_map", {})
-                            if current_res_map:
-                                for server_key, resources in current_res_map.items():
-                                    if hasattr(server_key, 'node_id'):
-                                        serv_id = server_key.node_id
-                                    elif isinstance(server_key, int):
-                                        serv_id = server_key
-                                    else:
-                                        continue
-                                    
-                                    if serv_id in server_resource_usage:
-                                        cpu_freed = resources.get('cpu', 0) if isinstance(resources, dict) else 0
-                                        mem_freed = resources.get('mem', 0) if isinstance(resources, dict) else 0
-                                        gpu_freed = resources.get('gpu', 0) if isinstance(resources, dict) else 0
-                                        
-                                        server_resource_usage[serv_id]["gpu"] += gpu_freed
-                                        server_resource_usage[serv_id]["cpu"] += cpu_freed
-                                        server_resource_usage[serv_id]["memory"] += mem_freed
-                        
-                        # Restore original allocation
-                        if original_gpus and original_res_map:
-                            # Note: When restoring, we need to add resources back (opposite of allocation)
-                            # So we manually restore resources first, then mark GPUs
-                            
-                            # Mark GPUs as in use (but don't update server_resource_usage again since we already restored)
-                            mark_gpu_in_use(gpu_df, original_gpus, j_id)
-                            
-                            # Restore job state
-                            j["res_map"] = copy.deepcopy(original_res_map)
-                            j["num_GPUs_allocated"] = original_state["num_GPUs_allocated"]
-                            j["cpus_allocated"] = original_state["cpus_allocated"]
-                            j["mem_allocated"] = original_state["mem_allocated"]
-                            j["sspeed_allocated"] = original_state["sspeed_allocated"]
-                            j["is_running"] = original_state["is_running"]
-                            
-                            # Remove from jobs_to_terminate if it was added
-                            if j_id in jobs_to_terminate:
-                                jobs_to_terminate.remove(j_id)
+                    self._rollback_peer_jobs(
+                        peer_jobs_original_state, active_jobs, gpu_df, 
+                        server_resource_usage, jobs_to_terminate
+                    )
             
         
         return ([], False, {})
