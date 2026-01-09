@@ -422,7 +422,7 @@ class BloxManager(object):
         terminate_rank_0_ipaddr = list()
         terminate_ipaddr = list()
         terminate_simulation = list()
-        print(f"[DEBUG] exec_jobs: Jobs to terminate: {jobs_to_terminate}, Jobs to launch: {list(jobs_to_launch.keys())}")
+        print(f"[DEBUG] exec_jobs: Jobs to terminate: {jobs_to_terminate}, Jobs to launch: {list(jobs_to_launch.keys()) if jobs_to_launch else []} (total: {len(jobs_to_launch)})")
         print("Job IDs to terminate {}".format(jobs_to_terminate))
         for jid in jobs_to_terminate:
             # find ipaddresses for corresponding jobs to terminate

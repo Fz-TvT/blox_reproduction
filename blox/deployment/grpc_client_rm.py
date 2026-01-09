@@ -313,7 +313,7 @@ class ResourceManagerComm(object):
                 job = active_job_dict[job_id]
                 
                 # 获取 GPU 数量（数值），确保是整数类型
-                num_gpus_raw = active_job_dict[job_id]["num_allocated_gpus"]
+                num_gpus_raw = active_job_dict[job_id]["num_GPUs_allocated"]
                 try:
                     if isinstance(num_gpus_raw, str):
                         num_gpus = int(num_gpus_raw) if num_gpus_raw.isdigit() else 0
