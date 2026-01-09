@@ -1038,11 +1038,11 @@ class JobPlacement(object):
                     if j_id in active_jobs:
                         j = active_jobs[j_id]
                         peer_jobs_original_state[j_id] = {
-                            "res_map": copy.deepcopy(j.get("res_map", {})),
-                            "num_GPUs_allocated": j.get("num_GPUs_allocated", 0),
-                            "cpus_allocated": j.get("cpus_allocated", 0),
-                            "mem_allocated": j.get("mem_allocated", 0),
-                            "sspeed_allocated": j.get("sspeed_allocated", 0),
+                            "res_map": copy.deepcopy(j.get("res_map")),
+                            "num_GPUs_allocated": j.get("num_GPUs_allocated"),
+                            "cpus_allocated": j.get("cpus_allocated"),
+                            "mem_allocated": j.get("mem_allocated"),
+                            "sspeed_allocated": j.get("sspeed_allocated", ),
                             "is_running": j.get("is_running", False),
                             "gpus": find_gpus_matching_JobID(j_id, gpu_df)
                         }
@@ -1051,12 +1051,7 @@ class JobPlacement(object):
                 for j_id in jobs_to_realloc:
                     if j_id not in active_jobs:
                         continue
-                    
                     j = active_jobs[j_id]
-                    # Get peer job's GPUs before deallocation
-                    j_gpus = find_gpus_matching_JobID(j_id, gpu_df)
-                    if not j_gpus:
-                        continue
                     
                     # Save peer job's res_map (deep copy) - preserve server keys
                     peer_res_map = {}
@@ -1068,70 +1063,48 @@ class JobPlacement(object):
                     
                     # Deallocate peer job (revert_iter=True to rollback progress)
                     # Free resources in server_resource_usage
-                    if j_res_map:
-                        for server_key, resources in j_res_map.items():
-                            if hasattr(server_key, 'node_id'):
-                                serv_id = server_key.node_id
-                            elif isinstance(server_key, int):
-                                serv_id = server_key
-                            else:
-                                continue
-                            
-                            if serv_id in server_resource_usage:
-                                cpu_freed = resources.get('cpu', 0) if isinstance(resources, dict) else 0
-                                mem_freed = resources.get('mem', 0) if isinstance(resources, dict) else 0
-                                gpu_freed = resources.get('gpu', 0) if isinstance(resources, dict) else 0
-                                
-                                server_resource_usage[serv_id]["gpu"] += gpu_freed
-                                server_resource_usage[serv_id]["cpu"] += cpu_freed
-                                server_resource_usage[serv_id]["memory"] += mem_freed
                     
-                    # Deallocate from gpu_df
-                    delete_job_by_id(gpu_df, j_id)
-                    
-                    if j_id not in jobs_to_terminate:
-                        jobs_to_terminate.append(j_id)
-                    j["is_running"] = False
                     # Get peer job's demand vector (after deallocation, deficit = demand)
                     peer_demand_vec = [
-                        j.get("job_gpu_demand", 0),
-                        j.get("job_cpu_demand", j.get("job_cpu_demand_orig", 0)),
-                        j.get("job_mem_demand", j.get("job_mem_demand_orig", 0)),
-                        j.get("job_sspeed_demand", j.get("job_sspeed_demand_orig", 0))
+                        j.get("job_gpu_demand"),
+                        j.get("job_cpu_demand"),
+                        j.get("job_mem_demand"),
+                        j.get("job_sspeed_demand")
                     ]
-                    
                     # Try to adjust peer job to fair-share
                     can_adjust_peer, new_peer_demand_vec = self._make_fair_share(j, peer_demand_vec)
                     if can_adjust_peer:
                         peer_demand_vec = new_peer_demand_vec
                     
+                    # Get current GPU allocation for this peer job (needed for calculating GPU share)
+                    gpus_realloc = find_gpus_matching_JobID(j_id, gpu_df)
+                    
                     # Recalculate peer_res_map with fair-share allocation per server
                     # Based on GPU share per server (from original res_map)
-                    total_peer_gpus = len(j_gpus)
                     for server_key in peer_res_map.keys():
                         # Get GPU count for this server from original res_map
-                        original_gpu_count = peer_res_map[server_key].get('gpu', 0)
+                        original_gpu_count = peer_res_map[server_key].get('gpu_allocated', 0)
                         if original_gpu_count == 0:
                             continue
                         
                         # Calculate GPU share: GPUs on this server / total GPUs
-                        gpu_share = original_gpu_count / total_peer_gpus if total_peer_gpus > 0 else 0
+                        gpu_share = original_gpu_count / len(gpus_realloc) if len(gpus_realloc) > 0 else 0
                         peer_demand_vec_share = [res * gpu_share for res in peer_demand_vec]
                         peer_alloc_map = self._vector_to_map(peer_demand_vec_share)
                         peer_res_map[server_key] = peer_alloc_map
                     
                     # Reallocate peer job with updated res_map
                     if peer_res_map:
-                        # Mark GPUs as in use and update server resource usage
-                        # mark_gpu_in_use will update both gpu_df and server_resource_usage if res_map is provided
-                        mark_gpu_in_use(gpu_df, j_gpus, j_id, res_map=peer_res_map, server_resource_usage=server_resource_usage)
+                        # Update server resource usage (treating entire node as a whole)
+                        # This function only updates server_resource_usage, not gpu_df
+                        update_node_resource_usage(peer_res_map, server_resource_usage)
                         
                         # Update job state
                         j["res_map"] = peer_res_map
-                        j["num_GPUs_allocated"] = len(j_gpus)
-                        j["cpus_allocated"] = sum(r.get("cpu", 0) for r in peer_res_map.values())
-                        j["mem_allocated"] = sum(r.get("mem", 0) for r in peer_res_map.values())
-                        j["sspeed_allocated"] = sum(r.get("sspeed", 0) for r in peer_res_map.values())
+                        j["num_GPUs_allocated"] = len(gpus_realloc)
+                        j["cpus_allocated"] = sum(r.get("cpu_allocated", 0) for r in peer_res_map.values())
+                        j["mem_allocated"] = sum(r.get("mem_allocated", 0) for r in peer_res_map.values())
+                        j["sspeed_allocated"] = sum(r.get("sspeed_allocated", 0) for r in peer_res_map.values())
                         j["is_running"] = True
                 
                 # Try to allocate current job after reallocating peers
@@ -1144,7 +1117,7 @@ class JobPlacement(object):
                 if success:
                     res_map = {}
                     if allocated_gpus:
-                        sspeed_d = demand_vec[3] if len(demand_vec) > 3 else 0.0
+                        sspeed_d = demand_vec[3]
                         res_map = create_res_map_from_placement(
                             allocated_gpus, gpu_df, node_info,
                             gpu_demand, cpu_demand, mem_demand, sspeed_d
@@ -1336,13 +1309,74 @@ def mark_gpu_in_use(
             if node_id in server_resource_usage:
                 # Update server resource usage (similar to _server.allocate(res_map[_server]))
                 # Subtract allocated resources from available resources
-                cpu_allocated = resources.get("cpu", 0)
-                mem_allocated = resources.get("mem", 0)
-                gpu_allocated = resources.get("gpu", 0)
-                
+                cpu_allocated = resources.get("cpu_allocated", 0)
+                mem_allocated = resources.get("mem_allocated", 0)
+                gpu_allocated = resources.get("gpu_allocated", 0)
                 server_resource_usage[node_id]["gpu"] = server_resource_usage[node_id].get("gpu", 0) - gpu_allocated
                 server_resource_usage[node_id]["cpu"] =  server_resource_usage[node_id].get("cpu", 0) - cpu_allocated
                 server_resource_usage[node_id]["memory"] =  server_resource_usage[node_id].get("memory", 0) - mem_allocated
+    
+    return None
+
+
+def update_node_resource_usage(
+    res_map: dict,
+    server_resource_usage: dict
+) -> None:
+    """
+    更新节点资源使用情况，将整个节点上的资源看作一个整体。
+    只更新 server_resource_usage，不更新 gpu_df。
+    
+    Args:
+        res_map: 资源映射字典 {ServerWrapper/int: {'cpu_allocated': int, 'mem_allocated': float, 
+                 'gpu_allocated': int, 'sspeed_allocated': float}}
+        server_resource_usage: 服务器资源使用情况字典，格式: {node_id: {"gpu": int, "cpu": float, "memory": float}}
+    
+    Returns:
+        None
+        原地修改 server_resource_usage
+    """
+    if res_map is None or server_resource_usage is None:
+        return
+    
+    # 按节点汇总资源分配
+    node_resources = {}
+    for server_key, resources in res_map.items():
+        # 提取 node_id
+        if hasattr(server_key, 'node_id'):
+            node_id = server_key.node_id
+        elif hasattr(server_key, 'server_id'):
+            node_id = server_key.server_id
+        elif isinstance(server_key, int):
+            node_id = server_key
+        else:
+            continue
+        
+        # 汇总该节点上的所有资源
+        if node_id not in node_resources:
+            node_resources[node_id] = {
+                "cpu_allocated": 0,
+                "mem_allocated": 0,
+                "gpu_allocated": 0,
+                "sspeed_allocated": 0
+            }
+        
+        node_resources[node_id]["cpu_allocated"] += resources.get("cpu_allocated", 0)
+        node_resources[node_id]["mem_allocated"] += resources.get("mem_allocated", 0)
+        node_resources[node_id]["gpu_allocated"] += resources.get("gpu_allocated", 0)
+        node_resources[node_id]["sspeed_allocated"] += resources.get("sspeed_allocated", 0)
+    
+    # 一次性更新每个节点的资源使用情况
+    for node_id, total_resources in node_resources.items():
+        if node_id in server_resource_usage:
+            # 从可用资源中减去已分配的资源
+            cpu_allocated = total_resources.get("cpu_allocated", 0)
+            mem_allocated = total_resources.get("mem_allocated", 0)
+            gpu_allocated = total_resources.get("gpu_allocated", 0)
+            
+            server_resource_usage[node_id]["gpu"] = server_resource_usage[node_id].get("gpu", 0) - gpu_allocated
+            server_resource_usage[node_id]["cpu"] = server_resource_usage[node_id].get("cpu", 0) - cpu_allocated
+            server_resource_usage[node_id]["memory"] = server_resource_usage[node_id].get("memory", 0) - mem_allocated
     
     return None
 
