@@ -348,18 +348,11 @@ class ResourceManagerComm(object):
                     base_iteration_time = job.get("job_iteration_time", 1.0)
                     if base_iteration_time <= 0:
                         base_iteration_time = 1.0
-                    
-                    actual_iteration_time = base_iteration_time / tput if tput > 0 else base_iteration_time
-                    actual_iteration_time = base_iteration_time
-                    # 防止除零错误
-                    if actual_iteration_time <= 0:
-                        actual_iteration_time = base_iteration_time
-                    
+                    total_iterations_in_round = (
+                    round_duration * tput / base_iteration_time
+                    )
                     # 计算本轮能完成多少迭代（考虑 tput 的影响）
                     # 对于多 GPU：每个 GPU 并行处理，所以总迭代数 = 单 GPU 迭代数 * GPU 数量
-                    iterations_per_gpu_in_round = round_duration / actual_iteration_time if actual_iteration_time > 0 else 0
-                    total_iterations_in_round = iterations_per_gpu_in_round * num_gpus
-                    
                     # attained_service 应该考虑 GPU 数量：如果有 N 个 GPU，每轮累加 round_duration * N
                     # 这与 attained_service_scheduler 的计算方式一致
                     attained_service = (
@@ -367,13 +360,16 @@ class ResourceManagerComm(object):
                         + round_duration * num_gpus
                     )
 
+                    # 计算本轮能完成多少迭代（考虑 tput 的影响）
+                    # 对于多 GPU：每个 GPU 并行处理，所以总迭代数 = 单 GPU 迭代数 * GPU 数量
+
                     # 实际迭代时间（考虑 tput 影响）
-                    per_iteration_time = actual_iteration_time
+                    per_iteration_time = base_iteration_time / tput if tput > 0 else base_iteration_time
 
                     # 新的总迭代次数 = 本轮完成的迭代次数 + 历史已经完成的迭代次数
                     job_executed_iteration = active_job_dict[job_id].get("job_executed_iteration", 0)
                     total_iteration_achieved = (
-                        total_iterations_in_round
+                        total_iterations_in_round*num_gpus
                         + job_executed_iteration
                     )
                     

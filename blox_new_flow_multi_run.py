@@ -180,7 +180,7 @@ def parse_args(parser):
     parser.add_argument("--simulate", action="store_true", help="Enable Simulation")
 
     parser.add_argument(
-        "--round-duration", type=int, default=300, help="Round duration in seconds"
+        "--round-duration", type=int, default=6000, help="Round duration in seconds"
     )
     parser.add_argument(
         "--start-id-track", type=int, default=0, help="Starting ID to track"
