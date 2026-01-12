@@ -44,7 +44,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         small_trace=False,
         placement=True,
         prioritize=False,
-        round_duration=30000,
+        round_duration=3000,
         number_of_machines=4,
         gpus_per_machine=8,
         memory_per_machine=500,
@@ -495,7 +495,7 @@ def launch_server(args) -> grpc.Server:
             [
                 # "Tiresias",
                 # "Optimus",
-                # "Fifo",
+                "Fifo",
                 # "Las",
                 # "Srtf",
                 # "New",
