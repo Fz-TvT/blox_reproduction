@@ -48,12 +48,13 @@ class Workload(object):
         trace=None,
         workload_type=None
     ):
-        if trace is not None:
-            self.workload_type = "replay"
-        elif cluster_job_log is None:
-            self.workload_type = "synthetic"
-        else:
-            self.workload_type = "philly"
+        # if trace is not None:
+        #     self.workload_type = "replay"
+        # elif cluster_job_log is None:
+        #     self.workload_type = "synthetic"
+        # else:
+        #     self.workload_type = "philly"
+        self.workload_type = "synthetic"
         self.job_id = 0
         self.jobs_per_hour = jobs_per_hour
         self.prioritize = prioritize
@@ -138,7 +139,6 @@ class Workload(object):
             else:
                 jobs = parse_philly_jobs.parse_jobs(
                     cluster_job_log,
-                    scheduler,
                     sum_attempts,
                     exponential,
                     multigpu,
@@ -171,7 +171,6 @@ class Workload(object):
             else:
                 jobs = parse_philly_jobs.parse_jobs(
                     cluster_job_log,
-                    scheduler,
                     sum_attempts,
                     exponential,
                     multigpu,
@@ -182,97 +181,97 @@ class Workload(object):
 
         return jobs
 
-    def add_synergy_profile(self, job):
-        # get the corresponding model handle
-        model_id = job.job_class_id
-        job_model = self.model_zoo.model(model_id, job.job_gpu_demand)
-        job.job_model = job_model
-        job.synergy_speedup = job.job_model.speedup
-        # job.tput = job_model.tput
-        update_speed = False
-        try:
-            job.synergy_res_matrix = job_model.synergy_res_score
-            job.synergy_storage_matrix = job_model.synergy_storage_score
-            job.job_placement_penalty = job_model.placement_penalty
+    # def add_synergy_profile(self, job):
+    #     # get the corresponding model handle
+    #     model_id = job.job_class_id
+    #     job_model = self.model_zoo.model(model_id, job.job_gpu_demand)
+    #     job.job_model = job_model
+    #     job.synergy_speedup = job.job_model.speedup
+    #     # job.tput = job_model.tput
+    #     update_speed = False
+    #     try:
+    #         job.synergy_res_matrix = job_model.synergy_res_score
+    #         job.synergy_storage_matrix = job_model.synergy_storage_score
+    #         job.job_placement_penalty = job_model.placement_penalty
 
-            # Ideal CPU, mem, storage allocations
-            job.job_cpu_demand_orig = job.job_gpu_demand * job_model.cpu_per_gpu
-            job.job_mem_demand_orig = job.job_gpu_demand * job_model.mem_per_gpu
-            job.job_sspeed_demand_orig = job.job_gpu_demand * job_model.sspeed_per_gpu
+    #         # Ideal CPU, mem, storage allocations
+    #         job.job_cpu_demand_orig = job.job_gpu_demand * job_model.cpu_per_gpu
+    #         job.job_mem_demand_orig = job.job_gpu_demand * job_model.mem_per_gpu
+    #         job.job_sspeed_demand_orig = job.job_gpu_demand * job_model.sspeed_per_gpu
 
-            if job.job_cpu_demand_orig > self.per_server_size[1]:
-                cpu_ratio = self.per_server_size[1] / job.job_cpu_demand_orig
-                job.job_cpu_demand_orig = self.per_server_size[1]
-                update_speed = True
-                if job.job_gpu_demand > self.per_server_size[0]:
-                    job.job_cpu_demand_orig = job.job_gpu_demand * (
-                        self.per_server_size[1] / self.per_server_size[0]
-                    )
-                    job.synergy_speedup = 1
-                    update_speed = False
+    #         if job.job_cpu_demand_orig > self.per_server_size[1]:
+    #             cpu_ratio = self.per_server_size[1] / job.job_cpu_demand_orig
+    #             job.job_cpu_demand_orig = self.per_server_size[1]
+    #             update_speed = True
+    #             if job.job_gpu_demand > self.per_server_size[0]:
+    #                 job.job_cpu_demand_orig = job.job_gpu_demand * (
+    #                     self.per_server_size[1] / self.per_server_size[0]
+    #                 )
+    #                 job.synergy_speedup = 1
+    #                 update_speed = False
 
-            if job.job_mem_demand_orig > self.per_server_size[2]:
-                mem_ratio = self.per_server_size[2] / job.job_mem_demand_orig
-                job.job_mem_demand_orig = self.per_server_size[2]
-                update_speed = True
-                if job.job_gpu_demand > self.per_server_size[0]:
-                    job.job_mem_demand_orig = job.job_gpu_demand * (
-                        self.per_server_size[2] / self.per_server_size[0]
-                    )
-                    job.synergy_speedup = 1
-                    update_speed = False
+    #         if job.job_mem_demand_orig > self.per_server_size[2]:
+    #             mem_ratio = self.per_server_size[2] / job.job_mem_demand_orig
+    #             job.job_mem_demand_orig = self.per_server_size[2]
+    #             update_speed = True
+    #             if job.job_gpu_demand > self.per_server_size[0]:
+    #                 job.job_mem_demand_orig = job.job_gpu_demand * (
+    #                     self.per_server_size[2] / self.per_server_size[0]
+    #                 )
+    #                 job.synergy_speedup = 1
+    #                 update_speed = False
 
-            if job.job_sspeed_demand_orig > self.per_server_size[3]:
-                sspeed_ratio = self.per_server_size[3] / job.job_sspeed_demand_orig
-                job.job_sspeed_demand_orig = self.per_server_size[3]
-                update_speed = True
-                if job.job_gpu_demand > self.per_server_size[0]:
-                    job.job_sspeed_demand_orig = job.job_gpu_demand * (
-                        self.per_server_size[3] / self.per_server_size[0]
-                    )
-                    job.synergy_speedup = 1
-                    update_speed = False
+    #         if job.job_sspeed_demand_orig > self.per_server_size[3]:
+    #             sspeed_ratio = self.per_server_size[3] / job.job_sspeed_demand_orig
+    #             job.job_sspeed_demand_orig = self.per_server_size[3]
+    #             update_speed = True
+    #             if job.job_gpu_demand > self.per_server_size[0]:
+    #                 job.job_sspeed_demand_orig = job.job_gpu_demand * (
+    #                     self.per_server_size[3] / self.per_server_size[0]
+    #                 )
+    #                 job.synergy_speedup = 1
+    #                 update_speed = False
 
-            job.job_cpu_demand = job.job_cpu_demand_orig
-            job.job_mem_demand = job.job_mem_demand_orig
-            job.job_sspeed_demand = job.job_sspeed_demand_orig
-        except:
-            raise ValueError("No appropriate model found")
+    #         job.job_cpu_demand = job.job_cpu_demand_orig
+    #         job.job_mem_demand = job.job_mem_demand_orig
+    #         job.job_sspeed_demand = job.job_sspeed_demand_orig
+    #     except:
+    #         raise ValueError("No appropriate model found")
 
-        # For now update perf based on cpu only. Real profile matrix will do acurtely
-        # Approx: Fit a straight line between fair-share and ideal
-        if update_speed:
-            speedup_diff = job.synergy_speedup - 1
-            ideal_cpu = job.job_gpu_demand * job_model.cpu_per_gpu
-            fair_cpu = job.job_gpu_demand * (
-                self.per_server_size[1] / self.per_server_size[0]
-            )
-            cpu_diff = ideal_cpu - fair_cpu
-            # TODO: commenting for lack of logger
-            # if cpu_diff == 0:
-            # self.logger.info(
-            # "{}: fair={}, ideal={}".format(str(job), fair_cpu, ideal_cpu)
-            # )
-            # raise ValueError("Shoudl not adjust speedup here")
-            slope = speedup_diff / cpu_diff
-            # y = y1 + m(x-x1)
-            # x1 = the modified cpu demand
-            new_speedup = 1 + slope * (job.job_cpu_demand - fair_cpu)
+    #     # For now update perf based on cpu only. Real profile matrix will do acurtely
+    #     # Approx: Fit a straight line between fair-share and ideal
+    #     if update_speed:
+    #         speedup_diff = job.synergy_speedup - 1
+    #         ideal_cpu = job.job_gpu_demand * job_model.cpu_per_gpu
+    #         fair_cpu = job.job_gpu_demand * (
+    #             self.per_server_size[1] / self.per_server_size[0]
+    #         )
+    #         cpu_diff = ideal_cpu - fair_cpu
+    #         # TODO: commenting for lack of logger
+    #         # if cpu_diff == 0:
+    #         # self.logger.info(
+    #         # "{}: fair={}, ideal={}".format(str(job), fair_cpu, ideal_cpu)
+    #         # )
+    #         # raise ValueError("Shoudl not adjust speedup here")
+    #         slope = speedup_diff / cpu_diff
+    #         # y = y1 + m(x-x1)
+    #         # x1 = the modified cpu demand
+    #         new_speedup = 1 + slope * (job.job_cpu_demand - fair_cpu)
 
-            # self.logger.info("{}: orig={}, new={}, old_cpu={}, new_cpu={}".format(str(job), job.synergy_speedup, new_speedup, ideal_cpu, job.job_cpu_demand))
-            job.synergy_speedup = new_speedup
-        # Update job iteration time and num_iterations. Model carries per gpu iteration time
-        # for fair share.
-        job.job_iteration_time = job_model.iteration_time
-        job.synergy_speedup_orig = job.synergy_speedup
-        # job.job_iteration_time = (job_model.iteration_time/job.job_gpu_demand)
+    #         # self.logger.info("{}: orig={}, new={}, old_cpu={}, new_cpu={}".format(str(job), job.synergy_speedup, new_speedup, ideal_cpu, job.job_cpu_demand))
+    #         job.synergy_speedup = new_speedup
+    #     # Update job iteration time and num_iterations. Model carries per gpu iteration time
+    #     # for fair share.
+    #     job.job_iteration_time = job_model.iteration_time
+    #     job.synergy_speedup_orig = job.synergy_speedup
+    #     # job.job_iteration_time = (job_model.iteration_time/job.job_gpu_demand)
 
-        # For philly workloads alone, set #iterations
-        # Num Iteration is fixed assuming consolidated fair-share job [1s per-iter dur]
-        if job.iter_is_duration:
-            job.job_total_iteration = int(
-                job.job_total_iteration / job.job_iteration_time
-            )
+    #     # For philly workloads alone, set #iterations
+    #     # Num Iteration is fixed assuming consolidated fair-share job [1s per-iter dur]
+    #     if job.iter_is_duration:
+    #         job.job_total_iteration = int(
+    #             job.job_total_iteration / job.job_iteration_time
+    #         )
 
     def analyze_philly_trace(self):
         total_job_durations = DataSeries(
@@ -312,6 +311,7 @@ class Workload(object):
             if self.prioritize:
                 if self.series_id_filter[0] <= job.job_id < self.series_id_filter[1]:
                     job.job_priority = 1
+        ##如果命令行没有pickle文件，那么下面代码不会执行
         else:
             job_id = self.job_id
             tenant_id = 0
@@ -321,12 +321,13 @@ class Workload(object):
             job_iteration_time = 1
             # job_total_iteration = get_gavel_like_iter()
             # job_total_iteration = get_total_iteration_exp(5000, 600000)
-            job_total_iteration = get_total_iteration(5000, 140000)/100
+            job_total_iteration = get_total_iteration(5000, 140000)
 
             # job_total_iteration = get_total_iteration(5000, 500000)
             # job_total_iteration = get_total_iteration(5000, 50000)
             # job_total_iteration = get_total_iteration(360, 1080)
-            job_gpu_demand = get_job_gpu_demand()
+            # job_gpu_demand = get_job_gpu_demand()
+            job_gpu_demand=1
             job_packing_score = None
             job_placement_score = None
             synergy_res_matrix = None
@@ -347,15 +348,24 @@ class Workload(object):
         self.job_id += 1
         self.generated_count +=1
         job.job_task, job.job_class_id = self.model_zoo.get_job_class()
+        model_id = job.job_class_id
+        job_model = self.model_zoo.model(model_id, job.job_gpu_demand)
+        job.job_model = job_model
 
-        # Update job iter times and CPU, Mem profiles for the job
-        # based on the chosen model
-        # add placement score and packing score for the job
-
-        # TODO: commenting for not including synergy profile
-        self.add_synergy_profile(job)
-
-        # self.logger.info("Job {}, class={}, task={}".format(job.job_id, job.job_class_id, job.job_task))
+        # 动态实例化模型类（如 alexnet_1）以获取 cpus 和 mem 参数
+        # 参考 Model.use_scores_from_tput() 的实现方式
+        import importlib
+        models_module = importlib.import_module('models')
+        modelname = job_model.model_name + "_" + str(job.job_gpu_demand)
+        if not hasattr(models_module, modelname):
+            modelname = job_model.model_name + "_1"
+        model_class = getattr(models_module, modelname)
+        model_stats = model_class(job_model.model_name)
+        job.iter_time_base =model_stats.iter_time_base
+        job.job_cpu_demand = model_stats.cpus
+        job.job_mem_demand = model_stats.mem
+        print(f"job.job_cpu_demand: {job.job_cpu_demand}")
+        print(f"job.job_mem_demand: {job.job_mem_demand}")
         return job
 
     def print_job_task_split(self):
@@ -373,6 +383,16 @@ class Workload(object):
     def get_current_job_id(self):
         return self.job_id
 
+    def get_job_gpu_demand(self):
+        rand_var = random.uniform(0,1)
+        if rand_var >= 0.95:
+            return 8
+        elif 0.8 <= rand_var < 0.95:
+            return 4
+        elif 0.7 <= rand_var < 0.8:
+            return 2
+        else:
+            return 1
     def online_workload(self, jobs_per_hour):
         num_hours = 24 * 4
         num_jobs = int(math.ceil(jobs_per_hour)) * num_hours
@@ -386,7 +406,7 @@ class Workload(object):
             job_arrival_times[i] = last_arrival_time
         job_iteration_times = [5] * num_jobs
         job_total_iterations = [720] * num_jobs
-        job_gpu_demands = [1] * num_jobs
+        job_gpu_demands = [1]*num_jobs
         job_packing_scores = np.zeros((num_jobs, num_jobs))
         num_placement_options = 2
         job_placement_scores = np.ones((num_jobs, num_placement_options))
@@ -445,8 +465,8 @@ class Workload(object):
         # job_total_iterations = [1000, 2000 ,3000 ,3000]
         # job_total_iterations = [2000]
         job_total_iterations = [2000] * num_jobs
-        job_gpu_demands = [1] * num_jobs
-        # job_gpu_demands = [1]*num_jobs
+        # job_gpu_demands = [get_job_gpu_demand() for _ in range(num_jobs)]
+        job_gpu_demands = [5]*num_jobs
 
         jobs = []
         for job_id in job_ids:

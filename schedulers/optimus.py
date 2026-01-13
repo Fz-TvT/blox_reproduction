@@ -68,7 +68,6 @@ class Optimus(SchedulingPolicy):
         
         # 在分配 GPU 后，更新 job_gpu_demand 和 total_gpus
         for job in job_dict:
-            job_dict[job]["job_gpu_demand"] = job_dict[job]["num_GPUs"]
             job_dict[job]["total_gpus"] = os.environ["sched_load"]
             if job_dict[job]["time_since_scheduled"] > 10 * 3600:
                 job_dict[job]["job_priority"] = 1

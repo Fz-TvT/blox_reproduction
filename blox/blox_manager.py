@@ -174,7 +174,8 @@ class BloxManager(object):
             self.round_duration,
             job_state.active_jobs,
         )
-        print("Metric Data {}".format(metric_data))
+        # 去除 synergy 相关的无效输出
+        # print("Metric Data {}".format(metric_data))
 
         job_state.update_metrics(metric_data, self.round_duration)
         # prune jobs which have been completed
@@ -459,8 +460,6 @@ class BloxManager(object):
         terminate_rank_0_ipaddr = list()
         terminate_ipaddr = list()
         terminate_simulation = list()
-        print(f"[DEBUG] exec_jobs: Jobs to terminate: {jobs_to_terminate}, Jobs to launch: {list(jobs_to_launch.keys())}")
-        print("Job IDs to terminate {}".format(jobs_to_terminate))
         for jid in jobs_to_terminate:
             # find ipaddresses for corresponding jobs to terminate
             running_ipddr = list(
@@ -504,7 +503,6 @@ class BloxManager(object):
                 node_placement = placement_info.get('nodes', {})  # {node_id: [gpu_ids]}
                 # Print node-level placement information
                 if node_placement:
-                    print(f"[PLACEMENT] Job {jid} placed on nodes:")
                     for node_id, gpu_list in node_placement.items():
                         print(f"  Node {node_id}: {len(gpu_list)} GPUs (IDs: {gpu_list})")
             else:
@@ -544,8 +542,25 @@ class BloxManager(object):
             results = [
                 future.result() for future in futures.as_completed(future_results)
             ]
-            print(f"[DEBUG] exec_jobs: Successfully launched {len(jobs_to_launch)} jobs: {list(jobs_to_launch.keys())}")
-            print("Launched")
+
+        # 检查运行中的作业是否有 GPU 需求大于 1 的
+        running_jobs_with_multi_gpu = []
+        for jid in active_jobs.active_jobs:
+            job = active_jobs.active_jobs[jid]
+            if job.get("is_running", False):
+                # 获取 GPU 需求（优先使用 job_gpu_demand，否则使用 num_GPUs）
+                gpu_demand = job.get("job_gpu_demand")
+                if gpu_demand > 1:
+                    running_jobs_with_multi_gpu.append({
+                        "job_id": jid,
+                        "gpu_demand": gpu_demand,
+                        "num_GPUs_allocated": job.get("num_GPUs_allocated", 0),
+                    })
+        
+        if running_jobs_with_multi_gpu:
+            print(f"[WARNING] Found {len(running_jobs_with_multi_gpu)} running jobs with GPU demand > 1:")
+            for job_info in running_jobs_with_multi_gpu:
+                print(f"  Job {job_info['job_id']}: GPU demand={job_info['gpu_demand']}, Allocated={job_info['num_GPUs_allocated']}")
 
         # update the time for training
 

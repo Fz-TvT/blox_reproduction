@@ -187,7 +187,6 @@ class JobPlacement(object):
                         'nodes': node_gpu_map,  # Node-level placement: {node_id: [gpu_ids]}
                         'gpus': placement       # All GPU IDs (for backward compatibility)
                     }
-                    print("job_launch",job_to_launch)
                     # Store res_map in active_jobs for later use by job.allocate()
                     active_jobs[job_id]["res_map"] = res_map
                     # print("placement",placement)
@@ -343,10 +342,6 @@ class JobPlacement(object):
                     # Update tput based on allocated CPU and memory
                     allocated_cpus = active_jobs[job_id]["cpus_allocated"]
                     allocated_mem = active_jobs[job_id]["mem_allocated"]
-                    tput_value = get_tput_from_job_dict(active_jobs[job_id], allocated_cpus, allocated_mem)
-                    if tput_value is not None and tput_value > 0:
-                        active_jobs[job_id]["tput"] = tput_value
-                    
                     # Note: Do NOT update cluster_state.server_resource_usage here
                     # Resource usage is updated in blox_manager.exec_jobs() via _update_server_resource_usage()
                     # Updating here would cause duplicate counting since exec_jobs() also updates it

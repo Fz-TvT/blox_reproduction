@@ -7,7 +7,7 @@ import numpy as np
 from workload import Workload
 from concurrent import futures
 from typing import Tuple
-
+from workload.utils import get_job_gpu_demand
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.lines as lines
@@ -37,15 +37,15 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         schedulers,
         placement_policies,
         acceptance_policies,
-        model_class_split=(30, 40, 30),
+        model_class_split=(20, 70, 10),
         ipaddr_resource_manager="localhost",
         exponential=True,
         multigpu=False,
         small_trace=False,
         placement=True,
         prioritize=False,
-        round_duration=3000,
-        number_of_machines=4,
+        round_duration=5000,
+        number_of_machines=16,
         gpus_per_machine=8,
         memory_per_machine=500,
         is_numa_available=False,
@@ -53,6 +53,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         num_jobs_default=0,
         exp_prefix="test",
     ):
+        # self.cluster_job_log = cluster_job_log
         self.cluster_job_log = cluster_job_log
         self.list_jobs_per_hour = list_jobs_per_hour
         self.job_ids_to_track = job_ids_to_track
@@ -340,7 +341,15 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
             new_job.pop("logger")
         if "job_task" in new_job:
             new_job.pop("job_task")
-        if "job_model" in new_job:
+        # 保存模型的关键信息，特别是 tput 矩阵，以便后续计算 tput
+        if "job_model" in new_job and new_job["job_model"] is not None:
+            job_model = new_job["job_model"]
+            # 保存 tput 矩阵（转换为列表以便序列化）
+            if hasattr(job_model, "tput") and job_model.tput is not None:
+                import numpy as np
+                if isinstance(job_model.tput, np.ndarray):
+                    new_job["tput_matrix"] = job_model.tput.tolist()
+            # 移除 job_model 对象（无法序列化）
             new_job.pop("job_model")
         
         # Handle NumPy arrays (convert to list or remove)
@@ -358,7 +367,14 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         for key in keys_to_remove:
             new_job.pop(key)
 
+        # Set num_GPUs from job_gpu_demand (needed for job_state.add_new_jobs)        
         # Initialize allocated resources to 0 (job hasn't been placed yet)
+        new_job["job_gpu_demand"]=1
+        new_job["num_GPUs"] = new_job["job_gpu_demand"]
+        # if new_job["job_gpu_demand"] != 1:
+        #     import ipdb
+        #     print(new_job["job_gpu_demand"])
+        #     ipdb.set_trace()
         new_job["num_GPUs_allocated"] = 0
         new_job["cpus_allocated"] = 0
         new_job["mem_allocated"] = 0
@@ -490,7 +506,7 @@ def launch_server(args) -> grpc.Server:
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
     runner = SimulatorRunner(
             args.cluster_job_log,
-            np.arange(args.jobs_per_hour, args.jobs_per_hour+3, 1.0).tolist(),
+            np.arange(args.jobs_per_hour, args.jobs_per_hour+1, 1.0).tolist(),
             (args.start_job_track, args.end_job_track),
             [
                 # "Tiresias",
