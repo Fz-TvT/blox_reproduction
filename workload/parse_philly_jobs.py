@@ -149,7 +149,6 @@ def parse_jobs(
                     if prev_gpu_demand % 2 == 1 and prev_gpu_demand > 1:
                         prev_gpu_demand += 1
                     gpu_demand = prev_gpu_demand
-
                 jobs.append(
                     Job(
                         job_id,

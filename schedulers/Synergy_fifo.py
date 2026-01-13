@@ -71,7 +71,7 @@ class Synergy_fifo(SchedulingPolicy):
         for job in sorted_job_order:
             job_id, job_info = job
             job_status = "running" if job_info.get("is_running", False) else "pending"
-            if job_info.get("time_since_scheduled") > 1 * 3600:
+            if job_info.get("time_since_scheduled") > 1000 * 3600:
                 job_info["job_priority"] = 1
         schedule_info = dict()
         schedule_info["jobs_this_round"] = jobs_this_round

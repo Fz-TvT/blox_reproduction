@@ -30,60 +30,76 @@ def get_tput_from_job_dict(job_dict, cpu_allocated=None, mem_allocated=None):
     Returns:
         tput 值(float),如果无法获取则返回 synergy_speedup 或 1.0(默认值）
     """
-    # 首先检查是否有直接存储的 tput 值
-    if "tput" in job_dict and job_dict["tput"] is not None:
-        try:
-            tput_val = float(job_dict["tput"])
-            if tput_val > 0:
-                return tput_val
-        except (ValueError, TypeError):
-            pass
+
     
-    # 检查模型是否存在
-    if "job_model" in job_dict and job_dict["job_model"] is not None:
+    # 优先从保存的 tput_matrix 列表中获取（job_model 可能在 _clean_sim_job 中被移除）
+    tput_matrix = None
+    if "tput_matrix" in job_dict and job_dict["tput_matrix"] is not None:
+        # 将列表转换回 numpy 数组
+        tput_matrix = np.array(job_dict["tput_matrix"])
+    elif "job_model" in job_dict and job_dict["job_model"] is not None:
+        # 如果 job_model 还存在，直接从对象获取
         job_model = job_dict["job_model"]
-        
-        # 检查模型是否有 tput 矩阵
         if hasattr(job_model, "tput") and job_model.tput is not None:
-            # 使用传入的值或字典中的值（优先使用新字段名 *_allocated）
-            cpu = cpu_allocated if cpu_allocated is not None else job_dict.get("cpus_allocated", job_dict.get("cpus", 0))
-            mem = mem_allocated if mem_allocated is not None else job_dict.get("mem_allocated", job_dict.get("mem", 0))
-            
-            # CPU 和内存值映射（与 Job 类中的定义一致）
-            cpu_val = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 9, 7: 12, 8: 24}
-            mem_val = {0: 62.5, 1: 125, 2: 187.5, 3: 250}
-            
-            # 找到对应的索引
-            def get_idx(id_map, value):
-                for k, v in id_map.items():
-                    if value == v:
-                        return k
-                return None
-            
-            cpu_idx = get_idx(cpu_val, cpu)
-            mem_idx = get_idx(mem_val, mem)
-            
-            if cpu_idx is not None and mem_idx is not None:
-                # 从 tput 矩阵中获取值
-                try:
-                    tput_matrix = job_model.tput
-                    if isinstance(tput_matrix, np.ndarray):
-                        # 确保索引在有效范围内
-                        if cpu_idx < tput_matrix.shape[0] and mem_idx < tput_matrix.shape[1]:
-                            return float(tput_matrix[cpu_idx, mem_idx])
-                except Exception as e:
-                    logging.warning(f"Error getting tput from matrix: {e}")
+            tput_matrix = job_model.tput if isinstance(job_model.tput, np.ndarray) else np.array(job_model.tput)
     
-    # 如果无法从模型获取，使用 synergy_speedup 作为替代
-    if "synergy_speedup" in job_dict and job_dict["synergy_speedup"] is not None:
-        try:
-            speedup = float(job_dict["synergy_speedup"])
-            if speedup > 0:
-                return speedup
-        except (ValueError, TypeError):
-            pass
+    if tput_matrix is None:
+        logging.warning(f"Job {job_dict.get('job_id', 'unknown')}: tput_matrix not found")
+        return 1.0
     
-    # 默认返回 1.0
+    # 使用传入的值或字典中的值（优先使用新字段名 *_allocated）
+    cpu = cpu_allocated if cpu_allocated is not None else job_dict.get("cpus_allocated", job_dict.get("cpus", 0))
+    mem = mem_allocated if mem_allocated is not None else job_dict.get("mem_allocated", job_dict.get("mem", 0))
+    
+    # 如果 CPU 或内存为 0，无法查找 tput
+    if cpu == 0 or mem == 0:
+        logging.warning(f"Job {job_dict.get('job_id', 'unknown')}: cpu={cpu}, mem={mem}, cannot get tput (resources not allocated yet)")
+        return 1.0
+    
+    # CPU 和内存值映射（与 Job 类中的定义一致）
+    cpu_val = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 9, 7: 12, 8: 24}
+    mem_val = {0: 62.5, 1: 125, 2: 187.5, 3: 250, 4: 312.5, 5: 375, 6: 437.5, 7: 500}
+    
+    # 找到对应的索引（使用最接近的值）
+    def get_idx(id_map, value):
+        # 首先尝试精确匹配
+        for k, v in id_map.items():
+            if value == v:
+                return k
+        # 如果找不到精确匹配，找最接近的值
+        closest_key = None
+        min_diff = float('inf')
+        for k, v in id_map.items():
+            diff = abs(value - v)
+            if diff < min_diff:
+                min_diff = diff
+                closest_key = k
+        return closest_key
+    
+    cpu_idx = get_idx(cpu_val, cpu)
+    mem_idx = get_idx(mem_val, mem)
+    
+    if cpu_idx is None or mem_idx is None:
+        logging.warning(f"Job {job_dict.get('job_id', 'unknown')}: Cannot find index for cpu={cpu}, mem={mem}")
+        return 1.0
+    
+    # 从 tput 矩阵中获取值
+    try:
+        if isinstance(tput_matrix, np.ndarray):
+            # 确保索引在有效范围内
+            if cpu_idx < tput_matrix.shape[0] and mem_idx < tput_matrix.shape[1]:
+                tput_value = tput_matrix[cpu_idx, mem_idx]
+                if tput_value > 0:
+                    return tput_value
+                else:
+                    logging.warning(f"Job {job_dict.get('job_id', 'unknown')}: tput value is 0 at [{cpu_idx}, {mem_idx}]")
+            else:
+                logging.warning(f"Job {job_dict.get('job_id', 'unknown')}: Index out of range: cpu_idx={cpu_idx}, mem_idx={mem_idx}, shape={tput_matrix.shape}")
+        else:
+            logging.warning(f"Job {job_dict.get('job_id', 'unknown')}: tput_matrix is not a numpy array")
+    except Exception as e:
+        logging.warning(f"Job {job_dict.get('job_id', 'unknown')}: Error getting tput from matrix: {e}")
+    
     return 1.0
 
 
@@ -193,8 +209,6 @@ class ResourceManagerComm(object):
             None
         """
         # TODO: Multithread this
-        print("In terminate simulation")
-        print("job id list {}".format(job_id_list))
         assert len(job_id_list) == len(terminate_simulation)
         assert len(job_id_list) == len(terminate_rank_0_ipaddr)
         assert len(job_id_list) == len(all_ipaddr_list)
@@ -224,11 +238,6 @@ class ResourceManagerComm(object):
             )
             # TODO: Add simulator
 
-            print("Called Terminate for ip address {}".format(send_ip_address))
-            print("Terminating job ids {}".format(send_request_dict[send_ip_address]))
-            print(
-                "IP_addr_terminate {}".format(other_ip_address_to_send[send_ip_address])
-            )
 
             with grpc.insecure_channel(send_ip_address) as channel:
                 stub = nm_pb2_grpc.NMServerStub(channel)
@@ -292,12 +301,7 @@ class ResourceManagerComm(object):
                     else:
                         metric_data_dict[job_id] = metric_data
 
-                    # Add previous data
-                    print(
-                        "Job id {} Aggregated Metric Data {}".format(
-                            job_id, metric_data
-                        )
-                    )
+                    # 去除 synergy 相关的无效输出
                     # Same job ids can be running at multiple ip addr
             else:
                 # # this is a simulation
@@ -341,18 +345,21 @@ class ResourceManagerComm(object):
                     if tput is None or tput <= 0:
                         # 如果无法获取 tput，使用默认值 1.0
                         tput = 1.0
+                    # 获取基准迭代时间（从模型获取的迭代时间，在 add_synergy_profile 中设置）
+                    # 如果 iter_is_duration 为 True，job_total_iteration 已经在 add_synergy_profile 中
+                    # 从持续时间转换为迭代次数：job_total_iteration = int(duration / job_iteration_time)
+                    base_iteration_time = job.get("iter_time_base")
                     
-                    # 根据公式：训练时间 = 样本数 * 训练轮数 / tput
-                    # 实际迭代时间 = 基准迭代时间 / tput
-                    # 每轮完成的迭代数 = round_duration / (基准迭代时间 / tput) = round_duration * tput / 基准迭代时间
-                    base_iteration_time = job.get("job_iteration_time", 1.0)
-                    if base_iteration_time <= 0:
-                        base_iteration_time = 1.0
-                    total_iterations_in_round = (
-                    round_duration * tput / base_iteration_time
-                    )
-                    # 计算本轮能完成多少迭代（考虑 tput 的影响）
+                    
+                    # 实际迭代时间 = 基准迭代时间 / (tput * synergy_speedup)
+                    # synergy_speedup 已经在 add_synergy_profile 中根据资源分配调整过了
+                    actual_iteration_time = base_iteration_time / (tput)
+                    # 计算本轮每个 GPU 能完成的迭代数
+                    # 每轮完成的迭代数 = round_duration / actual_iteration_time
+                    iterations_per_gpu_in_round = round_duration / actual_iteration_time 
                     # 对于多 GPU：每个 GPU 并行处理，所以总迭代数 = 单 GPU 迭代数 * GPU 数量
+                    total_iterations_in_round = iterations_per_gpu_in_round * num_gpus
+                    
                     # attained_service 应该考虑 GPU 数量：如果有 N 个 GPU，每轮累加 round_duration * N
                     # 这与 attained_service_scheduler 的计算方式一致
                     attained_service = (
@@ -360,16 +367,13 @@ class ResourceManagerComm(object):
                         + round_duration * num_gpus
                     )
 
-                    # 计算本轮能完成多少迭代（考虑 tput 的影响）
-                    # 对于多 GPU：每个 GPU 并行处理，所以总迭代数 = 单 GPU 迭代数 * GPU 数量
-
-                    # 实际迭代时间（考虑 tput 影响）
-                    per_iteration_time = base_iteration_time / tput if tput > 0 else base_iteration_time
+                    # 实际迭代时间（考虑 tput 和 synergy_speedup 影响）
+                    per_iteration_time = actual_iteration_time
 
                     # 新的总迭代次数 = 本轮完成的迭代次数 + 历史已经完成的迭代次数
                     job_executed_iteration = active_job_dict[job_id].get("job_executed_iteration", 0)
                     total_iteration_achieved = (
-                        total_iterations_in_round*num_gpus
+                        total_iterations_in_round
                         + job_executed_iteration
                     )
                     

@@ -66,6 +66,11 @@ class JobState(object):
         """
         Update the metrics fetched at end of each round duration
         """
+        # 输出当前运行的作业ID集合
+        running_job_ids = [jid for jid in self.active_jobs if self.active_jobs[jid].get("is_running", False)]
+        if len(running_job_ids) > 0:
+            print(f"[RUNNING JOBS] {sorted(running_job_ids)}")
+        
         for jid in self.active_jobs:
             if self.active_jobs[jid]["is_running"] == True:
                 if len(metric_data.get(jid)) > 0:
@@ -122,23 +127,17 @@ class JobState(object):
                             tracking_dict[p] = v
                         jobs["tracked_metrics"] = tracking_dict
                     ##added for Pollux
-                    if self.scheduler_name == "Pollux":
-                        """
-                        Create pollux.job.Job object, decide how to refer to model name, the options of which include
-                        "bert", "cifar10", "ncf", "imagenet", "deepspeech2", "yolov3"
-                        """
-                        print(jobs)
-                        job_temp = Job(self.job_counter, APPLICATIONS[jobs["application"]],
-                                       jobs["job_arrival_time"], self.time)
-                        if job_temp.application.name == "ncf":
-                            job_temp.target_batch_size = 32768
-                        jobs["tracked_metrics"]["pollux_metrics"] = job_temp
-                    ##added for Pollux
                     jobs["time_since_scheduled"] = 0
                     jobs["job_priority"] = 999
                     jobs["previously_launched"] = False
                     self.active_jobs[self.job_counter] = jobs
                     self.active_jobs[self.job_counter]["is_running"] = False
+                    
+                    # 输出新作业的 GPU 需求
+                    gpu_demand = jobs.get("job_gpu_demand")
+                    job_id = self.job_counter
+                    submit_time = jobs.get("submit_time", jobs.get("job_arrival_time", 0))
+                    
                     self.job_counter += 1
                 except IndexError:
                     # remove the job counter
