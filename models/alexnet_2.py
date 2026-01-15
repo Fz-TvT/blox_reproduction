@@ -15,7 +15,7 @@ class alexnet_2(ModelStats):
         self.batch = 512
         self.placement_penalty = 1
         self.speedup = 2.33
-        self.iter_time = 0.6
+        self.iter_time_base = 0.6
         self.tput = np.array([
              [0.3,0.3,0.3,0.3],
              [0.66,0.66,0.66,0.66],

@@ -16,6 +16,7 @@ class res18_2(ModelStats):
         self.placement_penalty = 1
         self.speedup = 2.4
         self.iter_time = 0.64
+        self.iter_time_base = 0.64
         self.tput = np.array([
              [0.37,0.37,0.37,0.37],
              [0.72,0.72,0.72,0.72],

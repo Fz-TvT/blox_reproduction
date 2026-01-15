@@ -13,9 +13,7 @@ def get_total_iteration(range_min, range_max):
 
 def get_job_gpu_demand():
     rand_var = random.uniform(0,1)
-    if rand_var >= 0.95:
-        return 8
-    elif 0.8 <= rand_var < 0.95:
+    if 0.8 <= rand_var:
         return 4
     elif 0.7 <= rand_var < 0.8:
         return 2

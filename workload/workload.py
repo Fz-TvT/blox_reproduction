@@ -37,12 +37,12 @@ class Workload(object):
         jobs_per_hour=5,
         sum_attempts=True,
         exponential=False,
-        multigpu=False,
+        multigpu=True,
         debug_multi=False,
         prioritize=False,
         small_trace=False,
         series_id_filter=(4000, 5000),
-        model_class_split=(30, 60, 10),
+        model_class_split=(20, 70, 10),
         per_server_size=None,
         num_jobs_default=5,
         trace=None,
@@ -326,8 +326,8 @@ class Workload(object):
             # job_total_iteration = get_total_iteration(5000, 500000)
             # job_total_iteration = get_total_iteration(5000, 50000)
             # job_total_iteration = get_total_iteration(360, 1080)
-            # job_gpu_demand = get_job_gpu_demand()
-            job_gpu_demand=1
+            job_gpu_demand = get_job_gpu_demand()
+            # job_gpu_demand = 1
             job_packing_score = None
             job_placement_score = None
             synergy_res_matrix = None
@@ -383,16 +383,6 @@ class Workload(object):
     def get_current_job_id(self):
         return self.job_id
 
-    def get_job_gpu_demand(self):
-        rand_var = random.uniform(0,1)
-        if rand_var >= 0.95:
-            return 8
-        elif 0.8 <= rand_var < 0.95:
-            return 4
-        elif 0.7 <= rand_var < 0.8:
-            return 2
-        else:
-            return 1
     def online_workload(self, jobs_per_hour):
         num_hours = 24 * 4
         num_jobs = int(math.ceil(jobs_per_hour)) * num_hours

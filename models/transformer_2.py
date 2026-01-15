@@ -16,6 +16,7 @@ class transformer_2(ModelStats):
         self.placement_penalty = 1
         self.speedup = 1
         self.iter_time = 0.67
+        self.iter_time_base = 0.67
         self.tput = np.array([
              [1,1,1,1],
              [1,1,1,1],

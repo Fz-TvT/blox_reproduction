@@ -12,7 +12,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.lines as lines
 from collections import defaultdict
-
+import heapq
 # something in pylab * screws up with random library, for now just overwriting
 import random
 
@@ -482,7 +482,7 @@ def parse_args(parser):
     )
 
     parser.add_argument(
-        "--end-job-track", type=int, default=100, help="End ID of job to track"
+        "--end-job-track", type=int, default=1000, help="End ID of job to track"
     )
     parser.add_argument(
         "--scheduler", type=str, default="Fifo", help="Name of the scheduler"
@@ -515,7 +515,7 @@ def launch_server(args) -> grpc.Server:
                 # "Las",
                 # "Srtf",
                 # "New",
-                "Synergy_fifo"
+                # "Synergy_fifo"
             ],
             ["Place"],
             ["AcceptAll"],
