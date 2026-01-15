@@ -15,7 +15,7 @@ class lstm_2(ModelStats):
         self.batch = 20
         self.placement_penalty = 1
         self.speedup = 1
-        self.iter_time = 0.011
+        self.iter_time_base = 0.011
         self.tput = np.array([
              [1,1,1,1],
              [1,1,1,1],

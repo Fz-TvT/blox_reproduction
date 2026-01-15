@@ -15,7 +15,7 @@ class gnmt_2(ModelStats):
         self.batch = 128
         self.placement_penalty = 1
         self.speedup = 1
-        self.iter_time = 0.12
+        self.iter_time_base = 0.12
         self.tput = np.array([
              [1,1,1,1],
              [1,1,1,1],

@@ -14,7 +14,7 @@ class deepspeech_4(ModelStats):
         self.batch = 20
         self.placement_penalty = 1
         self.speedup = 1
-        self.iter_time = 0.757
+        self.iter_time_base = 0.757
         self.tput = np.array([
              [0.3,0.3,0.3,0.3],
              [0.66,0.66,0.66,0.66],

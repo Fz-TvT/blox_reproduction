@@ -18,6 +18,7 @@ class transformer_4(ModelStats):
         #self.iter_time = 0.99
         #self.iter_time = 0.365
         self.iter_time = 0.67
+        self.iter_time_base = 0.67
         self.tput = np.array([
              [1,1,1,1],
              [1,1,1,1],
