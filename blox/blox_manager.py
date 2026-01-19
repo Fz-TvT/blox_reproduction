@@ -147,7 +147,6 @@ class BloxManager(object):
         ipaddress_to_fetch_from = list()
         if_simulation = list()
 
-        print(f"[DEBUG] update_metrics: Total active jobs: {len(job_state.active_jobs)}")
         running_jobs = []
         non_running_jobs = []
         for jid in job_state.active_jobs:

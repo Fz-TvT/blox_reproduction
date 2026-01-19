@@ -68,8 +68,6 @@ class JobState(object):
         """
         # 输出当前运行的作业ID集合
         running_job_ids = [jid for jid in self.active_jobs if self.active_jobs[jid].get("is_running", False)]
-        if len(running_job_ids) > 0:
-            print(f"[RUNNING JOBS] {sorted(running_job_ids)}")
         
         for jid in self.active_jobs:
             if self.active_jobs[jid]["is_running"] == True:
@@ -130,13 +128,15 @@ class JobState(object):
                     jobs["time_since_scheduled"] = 0
                     jobs["job_priority"] = 999
                     jobs["previously_launched"] = False
+                    jobs["job_time_remaining"] = jobs["job_total_iteration"] * jobs["job_iteration_time"]
                     self.active_jobs[self.job_counter] = jobs
                     self.active_jobs[self.job_counter]["is_running"] = False
-                    
+                    if "job_executed_iteration" not in jobs:
+                        jobs["job_executed_iteration"] = 0
                     # 输出新作业的 GPU 需求
                     gpu_demand = jobs.get("job_gpu_demand")
                     job_id = self.job_counter
-                    submit_time = jobs.get("submit_time", jobs.get("job_arrival_time", 0))
+                    submit_time = jobs.get("submit_time")
                     
                     self.job_counter += 1
                 except IndexError:
