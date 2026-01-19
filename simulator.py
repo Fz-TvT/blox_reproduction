@@ -482,7 +482,7 @@ def parse_args(parser):
     )
 
     parser.add_argument(
-        "--end-job-track", type=int, default=1000, help="End ID of job to track"
+        "--end-job-track", type=int, default=100, help="End ID of job to track"
     )
     parser.add_argument(
         "--scheduler", type=str, default="Fifo", help="Name of the scheduler"
@@ -511,9 +511,9 @@ def launch_server(args) -> grpc.Server:
             [
                 # "Tiresias",
                 # "Optimus",
-                "Fifo",
+                # "Fifo",
                 # "Las",
-                # "Srtf",
+                "Srtf",
                 # "New",
                 # "Synergy_fifo"
             ],

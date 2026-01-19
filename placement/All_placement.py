@@ -490,39 +490,25 @@ def Srtf_placement(new_job_schedule: dict, cluster_state: dict, node_info: dict,
                     active_jobs[job_id]["mem_allocated"] = sum(r.get("mem", 0) for r in res_map.values()) if res_map else 0
                     active_jobs[job_id]["sspeed_allocated"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
                 elif not found:
-                    # If placement not found, try to preempt running jobs with longer remaining time
-                    current_time_remaining = job_info.get("time_remaining")
-                    current_priority = job_info.get("job_priority")
-                    # Find running jobs with longer remaining time to preempt
-                    running_jobs_to_check = [
-                        (jid, active_jobs[jid]) 
-                        for jid in active_jobs 
-                        if active_jobs[jid].get("is_running", False) and 
-                           jid != job_id and
-                           jid not in jobs_to_terminate
-                    ]
-                    # Sort by priority first (ascending), then time_remaining (descending - longest first) for preemption
-                    running_jobs_to_check.sort(
-                        key=lambda x: (
-                            x[1].get("job_priority"),
-                            x[1].get("time_remaining")  # Negative for descending (longest first)
-                        )
-                    )
-                    
-                    # Try to preempt jobs with longer remaining time
-                    preemption_successful = False
-                    for terminated_jid, potential_job_to_terminate in running_jobs_to_check:
-                        term_priority = potential_job_to_terminate.get("job_priority")
-                        term_time_remaining = potential_job_to_terminate.get("time_remaining")
+                    # If placement not found, try to preempt running jobs from the end of job_order
+                    # Start from the end of jobs_this_round and work backwards (skip current job)
+                    for rev_idx in range(1, len(active_jobs) - idx):
+                        potential_job_tuple = jobs_this_round[-rev_idx]
+                        potential_job_id = potential_job_tuple[0]
+                        potential_job_to_terminate = active_jobs[potential_job_id]
                         
-                        # Preempt if: lower priority (higher number) OR (same priority and longer remaining time)
-                        # Only preempt if current job has higher priority or same priority but shorter time
-                        if (term_time_remaining > current_time_remaining):
+                        # Skip if this job is already marked for termination
+                        if potential_job_id in jobs_to_terminate:
+                            continue
+                        
+                        # Only terminate running jobs
+                        if potential_job_to_terminate.get("is_running", False):
                             # Terminate this job
-                            jobs_to_terminate.append(terminated_jid)
+                            jobs_to_terminate.append(potential_job_id)
                             potential_job_to_terminate["is_running"] = False
                             # Free up GPUs
-                            delete_job_by_id(gpu_df, terminated_jid)
+                            delete_job_by_id(gpu_df, potential_job_id)
+                            
                             # Update server_resource_usage
                             if potential_job_to_terminate.get("res_map"):
                                 free_node_resource_usage(potential_job_to_terminate["res_map"], server_resource_usage)
@@ -534,7 +520,7 @@ def Srtf_placement(new_job_schedule: dict, cluster_state: dict, node_info: dict,
                                 )
                             
                             # Try to place after preemption
-                            placement, found, res_map, updated_server_resource_usage =_synergy_find_placement(
+                            placement, found, res_map, updated_server_resource_usage = _synergy_find_placement(
                                 job_info, node_info, gpu_df, server_resource_usage, active_jobs,
                                 demand_vec[0], demand_vec[1], demand_vec[2]
                             )
@@ -544,7 +530,7 @@ def Srtf_placement(new_job_schedule: dict, cluster_state: dict, node_info: dict,
                                 server_resource_usage = updated_server_resource_usage
                             
                             if found:
-                                preemption_successful = True
+                                # We found an assignment
                                 # Group GPUs by node
                                 node_gpu_map = group_gpus_by_node(placement, gpu_df)
                                 job_to_launch[job_id] = {
@@ -563,9 +549,6 @@ def Srtf_placement(new_job_schedule: dict, cluster_state: dict, node_info: dict,
                                 active_jobs[job_id]["sspeed_allocated"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
                                 
                                 break  # Successfully placed, exit preemption loop
-                    
-                    # If preemption was successful, we've already placed the job above
-                    # No need to do anything else here
     
     return (jobs_to_terminate, job_to_launch)
 

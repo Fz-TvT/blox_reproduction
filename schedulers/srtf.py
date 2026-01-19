@@ -16,7 +16,9 @@ class Srtf(SchedulingPolicy):
         """
         self.metric_to_track = ["per_iter_time", "attained_service"]
         self.default_metric_value = [0, 0]
+        self.fair = True  # 默认使用公平共享模式
         pass
+
 
     @SchedulingPolicy.copy_arguments
     def schedule(
@@ -26,22 +28,30 @@ class Srtf(SchedulingPolicy):
         gpu_df: pd.DataFrame,
         global_placement_policy: Optional[str] = None,
     ) -> dict:
+        """
+        SRTF调度器按最短剩余时间优先调度
+        排序规则：优先级（降序） -> 剩余时长（升序） -> 到达时间（升序）
+        """
+        # 计算每个作业的剩余时长
 
-        for job in job_dict:
-            job_dict[job]["time_remaining"] = (
-                job_dict[job]["job_total_iteration"]
-                - job_dict[job]["job_executed_iteration"]
-            )
+        # 检查长时间未执行的作业并提升优先级
+        for job_id in job_dict:
+            time_since_scheduled = job_dict[job_id].get("time_since_scheduled", 0)
+            # 如果作业超过1000小时未执行，提升优先级
+            if time_since_scheduled > 1 * 3600:
+                job_dict[job_id]["job_priority"] = 1
+        
+        # 按优先级（降序，高优先级在前）、剩余时长（升序）、到达时间（升序）排序
         sorted_job_order = sorted(
             job_dict.items(),
-            key=lambda x: (x[1]["job_priority"], x[1]["time_remaining"],x[1]["submit_time"])
+            key=lambda x: (
+                x[1].get("job_priority", 0),  # 负号表示降序，高优先级在前
+                x[1].get("time_remaining", float('inf')),  # 剩余时长升序
+                x[1].get("submit_time", 0)  # 到达时间升序
+            )
         )
-        for job in sorted_job_order:
-            if job[1]["time_since_scheduled"] > 1000 * 3600:
-                job[1]["job_priority"] = 1
         
         schedule_info = dict()
         schedule_info["job_order"] = sorted_job_order
         schedule_info["run_all_jobs"] = False
-
         return schedule_info

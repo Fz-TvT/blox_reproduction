@@ -350,7 +350,6 @@ class ResourceManagerComm(object):
                     # 从持续时间转换为迭代次数：job_total_iteration = int(duration / job_iteration_time)
                     base_iteration_time = job.get("iter_time_base")
                     
-                    
                     # 实际迭代时间 = 基准迭代时间 / (tput * synergy_speedup)
                     # synergy_speedup 已经在 add_synergy_profile 中根据资源分配调整过了
                     actual_iteration_time = base_iteration_time / (tput)
@@ -371,7 +370,7 @@ class ResourceManagerComm(object):
                     per_iteration_time = actual_iteration_time
 
                     # 新的总迭代次数 = 本轮完成的迭代次数 + 历史已经完成的迭代次数
-                    job_executed_iteration = active_job_dict[job_id].get("job_executed_iteration", 0)
+                    job_executed_iteration = active_job_dict[job_id].get("job_executed_iteration")
                     total_iteration_achieved = (
                         total_iterations_in_round
                         + job_executed_iteration
@@ -382,7 +381,9 @@ class ResourceManagerComm(object):
                     active_job_dict[job_id][
                         "job_executed_iteration"
                     ] = total_iteration_achieved
-                    
+                    active_job_dict[job_id][
+                        "job_time_remaining"
+                    ] = (active_job_dict[job_id]["job_total_iteration"] - total_iteration_achieved)*base_iteration_time
                     if (total_iteration_achieved >= active_job_dict[job_id]["job_total_iteration"]):
                         job_exit = True
 
