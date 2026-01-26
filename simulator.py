@@ -40,11 +40,11 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         model_class_split=(20, 70, 10),
         ipaddr_resource_manager="localhost",
         exponential=True,
-        multigpu=False,
+        multigpu=True,
         small_trace=False,
         placement=True,
         prioritize=False,
-        round_duration=5000,
+        round_duration=6000,
         number_of_machines=16,
         gpus_per_machine=8,
         memory_per_machine=500,
@@ -195,6 +195,21 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         """
         Post Simulation Plot Graphs
         """
+        # 设置 matplotlib 样式参数
+        matplotlib.rcParams["pdf.fonttype"] = 42
+        matplotlib.rcParams["ps.fonttype"] = 42
+        matplotlib.rcParams["font.size"] = 11
+        matplotlib.rcParams["axes.labelsize"] = 12
+        matplotlib.rcParams["axes.titlesize"] = 14
+        matplotlib.rcParams["xtick.labelsize"] = 10
+        matplotlib.rcParams["ytick.labelsize"] = 10
+        matplotlib.rcParams["legend.fontsize"] = 10
+        
+        # 定义颜色和线型
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+        linestyles = ['-', '--', '-.', ':', '-']
+        markers = ['o', 's', '^', 'v', 'D', 'p', '*', 'h']
+        
         # print("plot called")
         jct_dict = defaultdict(dict)
         file_names_job_stats = list()
@@ -211,59 +226,104 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
                 print(scheduler, load)
                 jct_dict[scheduler][load] = self._get_avg_jct(data_job)
                 # print("Wrote to dict")
+        
+        # Plot Average JCT
         fig, ax1 = plt.subplots(1, 1)
-        fig.set_size_inches(10, 3)
-        matplotlib.rcParams["pdf.fonttype"] = 42
-        matplotlib.rcParams["ps.fonttype"] = 42
+        fig.set_size_inches(10, 6)
         print("Job completion dict {}".format(jct_dict))
         write_folder = f"./plots/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_jct"
-        for scheduler in self.schedulers:
+        if not os.path.exists(write_folder):
+            os.makedirs(write_folder)
+        
+        for idx, scheduler in enumerate(self.schedulers):
             plot_list = list()
-            # x_labels = list()
             for load in self.list_jobs_per_hour:
                 plot_list.append(jct_dict[scheduler][load])
-            ax1.plot(self.list_jobs_per_hour, plot_list, label=scheduler)
-        ax1.set_xlabel("Jobs Per Hour") 
-        ax1.set_ylabel("Time(seconds)") 
-        ax1.legend() 
-        ax1.set_title(f"{scheduler}_load_Average Job Completion Time")
-        if not os.path.exists(write_folder):
-                os.makedirs(write_folder)
+            color = colors[idx % len(colors)]
+            linestyle = linestyles[idx % len(linestyles)]
+            marker = markers[idx % len(markers)]
+            ax1.plot(
+                self.list_jobs_per_hour, 
+                plot_list, 
+                label=scheduler,
+                color=color,
+                linestyle=linestyle,
+                marker=marker,
+                linewidth=2.5,
+                markersize=8,
+                markerfacecolor=color,
+                markeredgecolor='white',
+                markeredgewidth=1.5
+            )
+        
+        ax1.set_xlabel("Jobs Per Hour", fontweight='bold') 
+        ax1.set_ylabel("Average Job Completion Time (seconds)", fontweight='bold') 
+        ax1.legend(loc='best', frameon=True, fancybox=True, shadow=True)
+        ax1.set_title("Average Job Completion Time vs Load", fontweight='bold', pad=15)
+        ax1.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+        ax1.spines['top'].set_visible(False)
+        ax1.spines['right'].set_visible(False)
+        plt.tight_layout()
         plt.savefig(
-                    os.path.join(write_folder, f"load_{load}_jct.pdf"),
-                    format="pdf",
-                    dpi=600,
-                    bbox_inches="tight",
-                )
+            os.path.join(write_folder, f"load_{load}_jct.pdf"),
+            format="pdf",
+            dpi=600,
+            bbox_inches="tight",
+        )
+        plt.close()
 
         # plot cdf
         for load in self.list_jobs_per_hour:
             fig, ax1 = plt.subplots(1, 1)
-            fig.set_size_inches(10, 3)
-            for scheduler in self.schedulers:
+            fig.set_size_inches(10, 6)
+            for idx, scheduler in enumerate(self.schedulers):
                 stat_fname = f"result/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_{scheduler}_{self.acceptance_policies[0]}_load_{load}_job_stats.json"
-                with open(stat_fname, "r") as fin:
-                    data_job = json.load(fin)
-                vals = data_job.values()
-                vals = [val[1] - val[0] for val in vals]
-                vals = sorted(vals)
-                plot_y_val = list()
-                for idx, val in enumerate(vals):
-                    plot_y_val.append(float(idx) / len(vals))
-                ax1.plot(vals, plot_y_val,label=scheduler)
-            ax1.set_xlabel("Time(hrs)") # 根据你的数据性质设置合适的x轴标签
-            ax1.set_ylabel("CDF") # 根据你的数据性质设置合适的y轴标签
-            ax1.set_title(f"{scheduler}_load_{load}_cdf")
-            ax1.legend()
+                try:
+                    with open(stat_fname, "r") as fin:
+                        data_job = json.load(fin)
+                    vals = data_job.values()
+                    vals = [val[1] - val[0] for val in vals]  # JCT in seconds
+                    vals = sorted(vals)
+                    # Convert to hours
+                    vals_hours = [val / 3600.0 for val in vals]
+                    plot_y_val = list()
+                    for i, val in enumerate(vals_hours):
+                        plot_y_val.append(float(i) / len(vals_hours))
+                    
+                    color = colors[idx % len(colors)]
+                    linestyle = linestyles[idx % len(linestyles)]
+                    ax1.plot(
+                        vals_hours, 
+                        plot_y_val,
+                        label=scheduler,
+                        color=color,
+                        linestyle=linestyle,
+                        linewidth=2.5,
+                        alpha=0.8
+                    )
+                except FileNotFoundError:
+                    print(f"Warning: File not found: {stat_fname}, skipping...")
+                    continue
+            
+            ax1.set_xlabel("Job Completion Time (hours)", fontweight='bold')
+            ax1.set_ylabel("Cumulative Distribution Function (CDF)", fontweight='bold')
+            ax1.set_title(f"CDF of Job Completion Time (Load: {load} jobs/hour)", fontweight='bold', pad=15)
+            ax1.legend(loc='best', frameon=True, fancybox=True, shadow=True)
+            ax1.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+            ax1.spines['top'].set_visible(False)
+            ax1.spines['right'].set_visible(False)
+            ax1.set_xlim(left=0)
+            ax1.set_ylim(bottom=0, top=1.0)
+            plt.tight_layout()
             write_folder = f"./plots/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_cdf_load_{load}"
             if not os.path.exists(write_folder):
-                        os.makedirs(write_folder)
+                os.makedirs(write_folder)
             plt.savefig(
-                    os.path.join(write_folder, f"load_{load}_cdf.pdf"),
-                    format="pdf",
-                    dpi=600,
-                    bbox_inches="tight",
-                )
+                os.path.join(write_folder, f"load_{load}_cdf.pdf"),
+                format="pdf",
+                dpi=600,
+                bbox_inches="tight",
+            )
             plt.close()            
                 # plt.savefig(
                 #     os.path.join(write_folder, f"{scheduler}_load_{load}_cdf.pdf"),
@@ -272,58 +332,96 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
                 #     bbox_inches="tight",
                 # )
 
-        # plot GPU demand
-
+        # plot GPU demand and free GPUs
         for load in self.list_jobs_per_hour:
             for scheduler in self.schedulers:
                 stat_fname = f"result/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_{scheduler}_{self.acceptance_policies[0]}_load_{load}_cluster_stats.json"
-                with open(stat_fname, "r") as fin:
-                    data_job = json.load(fin)
-                gpu_demand = list()
-                free_gpus = list()
-                for d in data_job.keys():
-                    gpu_demand.append(data_job[d]["gpu_demand"])
-                    free_gpus.append(data_job[d]["free_gpus"])
-                fig1, ax1 = plt.subplots(1, 1)
-                fig1.set_size_inches(10, 3)
-                ax1.set_title(f"{scheduler}_load_{load}_gpu_demand")
-                xs = list(map(float, data_job.keys()) )
-                # ax1.set_xticks(xs[::3])         
-                ax1.plot(data_job.keys(), gpu_demand,label=scheduler)
-                ax1.legend()
-                write_folder = f"./plots/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_{scheduler}_load_{load}"
-                if not os.path.exists(write_folder):
-                    os.makedirs(write_folder)
-                plt.xticks(rotation=45)
-                plt.gca().xaxis.set_major_locator(plt.MaxNLocator(15))  # 最多15个刻度
-                plt.tight_layout()  # 重新调整布局
-                plt.savefig(
-                    os.path.join(
-                        write_folder, f"{scheduler}_load_{load}_gpu_demand.pdf"
-                    ),
-                    format="pdf",
-                    dpi=600,
-                    bbox_inches="tight",
-                )
-                plt.close()            
-                # plot free GPUs
-                fig2, ax2 = plt.subplots(1, 1)
-                fig2.set_size_inches(10, 3)
-                ax2.set_title(f"{scheduler}_load_{load}_free_GPUs")
-                # ax2.set_xscale("log")   
-                # ax2.set_xticks(xs[::3])         
-                ax2.plot(data_job.keys(), free_gpus,label=f'{scheduler}')
-                ax2.legend()
-                plt.xticks(rotation=45)
-                plt.gca().xaxis.set_major_locator(plt.MaxNLocator(15))  # 最多15个刻度
-                plt.tight_layout()  # 重新调整布局
-                plt.savefig(
-                    os.path.join(write_folder, f"{scheduler}_load_{load}_free_gpu.pdf"),
-                    format="pdf",
-                    dpi=600,
-                    bbox_inches="tight",
-                )
-                plt.close()            
+                try:
+                    with open(stat_fname, "r") as fin:
+                        data_job = json.load(fin)
+                    gpu_demand = list()
+                    free_gpus = list()
+                    time_points = list()
+                    for d in data_job.keys():
+                        time_points.append(float(d))
+                        gpu_demand.append(data_job[d]["gpu_demand"])
+                        free_gpus.append(data_job[d]["free_gpus"])
+                    
+                    # Sort by time
+                    sorted_data = sorted(zip(time_points, gpu_demand, free_gpus))
+                    time_points = [t for t, _, _ in sorted_data]
+                    gpu_demand = [g for _, g, _ in sorted_data]
+                    free_gpus = [f for _, _, f in sorted_data]
+                    
+                    # Convert time to hours for better readability
+                    time_hours = [t / 3600.0 for t in time_points]
+                    
+                    # Plot GPU demand
+                    fig1, ax1 = plt.subplots(1, 1)
+                    fig1.set_size_inches(12, 6)
+                    color_idx = self.schedulers.index(scheduler) % len(colors)
+                    ax1.plot(
+                        time_hours, 
+                        gpu_demand,
+                        label=scheduler,
+                        color=colors[color_idx],
+                        linewidth=2,
+                        alpha=0.8
+                    )
+                    ax1.set_xlabel("Time (hours)", fontweight='bold')
+                    ax1.set_ylabel("GPU Demand", fontweight='bold')
+                    ax1.set_title(f"GPU Demand Over Time (Load: {load} jobs/hour, Scheduler: {scheduler})", 
+                                fontweight='bold', pad=15)
+                    ax1.legend(loc='best', frameon=True, fancybox=True, shadow=True)
+                    ax1.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+                    ax1.spines['top'].set_visible(False)
+                    ax1.spines['right'].set_visible(False)
+                    plt.xticks(rotation=45, ha='right')
+                    plt.gca().xaxis.set_major_locator(plt.MaxNLocator(20))
+                    plt.tight_layout()
+                    write_folder = f"./plots/{self.exp_prefix}_{self.job_ids_to_track[0]}_{self.job_ids_to_track[1]}_{scheduler}_load_{load}"
+                    if not os.path.exists(write_folder):
+                        os.makedirs(write_folder)
+                    plt.savefig(
+                        os.path.join(write_folder, f"{scheduler}_load_{load}_gpu_demand.pdf"),
+                        format="pdf",
+                        dpi=600,
+                        bbox_inches="tight",
+                    )
+                    plt.close()
+                    
+                    # Plot free GPUs
+                    fig2, ax2 = plt.subplots(1, 1)
+                    fig2.set_size_inches(12, 6)
+                    ax2.plot(
+                        time_hours, 
+                        free_gpus,
+                        label=scheduler,
+                        color=colors[color_idx],
+                        linewidth=2,
+                        alpha=0.8
+                    )
+                    ax2.set_xlabel("Time (hours)", fontweight='bold')
+                    ax2.set_ylabel("Free GPUs", fontweight='bold')
+                    ax2.set_title(f"Free GPUs Over Time (Load: {load} jobs/hour, Scheduler: {scheduler})", 
+                                fontweight='bold', pad=15)
+                    ax2.legend(loc='best', frameon=True, fancybox=True, shadow=True)
+                    ax2.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+                    ax2.spines['top'].set_visible(False)
+                    ax2.spines['right'].set_visible(False)
+                    plt.xticks(rotation=45, ha='right')
+                    plt.gca().xaxis.set_major_locator(plt.MaxNLocator(20))
+                    plt.tight_layout()
+                    plt.savefig(
+                        os.path.join(write_folder, f"{scheduler}_load_{load}_free_gpu.pdf"),
+                        format="pdf",
+                        dpi=600,
+                        bbox_inches="tight",
+                    )
+                    plt.close()
+                except FileNotFoundError:
+                    print(f"Warning: File not found: {stat_fname}, skipping...")
+                    continue            
 
 
     def _clean_sim_job(self, new_job: dict) -> dict:
@@ -369,21 +467,15 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
 
         # Set num_GPUs from job_gpu_demand (needed for job_state.add_new_jobs)        
         # Initialize allocated resources to 0 (job hasn't been placed yet)
-        new_job["job_gpu_demand"]=1
+        if not self.multigpu:
+            new_job["job_gpu_demand"] = 1
         new_job["num_GPUs"] = new_job["job_gpu_demand"]
-        # if new_job["job_gpu_demand"] != 1:
-        #     import ipdb
-        #     print(new_job["job_gpu_demand"])
-        #     ipdb.set_trace()
+
         new_job["num_GPUs_allocated"] = 0
         new_job["cpus_allocated"] = 0
         new_job["mem_allocated"] = 0
         new_job["sspeed_allocated"] = 0
-        # new_job["params_to_track"] = [
-        # "per_iter_time",
-        # "attained_service",
-        # ]
-        # new_job["default_values"] = [0, 0]
+
         return new_job
 
     def _generate_workload(self, workload_config):
@@ -482,7 +574,7 @@ def parse_args(parser):
     )
 
     parser.add_argument(
-        "--end-job-track", type=int, default=100, help="End ID of job to track"
+        "--end-job-track", type=int, default=1000, help="End ID of job to track"
     )
     parser.add_argument(
         "--scheduler", type=str, default="Fifo", help="Name of the scheduler"
@@ -516,6 +608,7 @@ def launch_server(args) -> grpc.Server:
                 "Srtf",
                 # "New",
                 # "Synergy_fifo"
+                "Synergy_srtf"
             ],
             ["Place"],
             ["AcceptAll"],

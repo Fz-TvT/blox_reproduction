@@ -34,7 +34,7 @@ class Workload:
         philly_arrival=False,
         multigpu=False,
         debug_multi=False,
-        prioritize=False,
+        prioritize=True,
         small_trace=False,
         series_id_filter=(4000, 5000),
         model_class_split=(30, 60, 10),
@@ -44,6 +44,7 @@ class Workload:
     ):
         self.logger = logging.getLogger(__name__)
         self.trace = trace
+        self.multigpu = multigpu  # 保存 multigpu 参数为实例变量
 
         if trace is not None:
             self.workload_type = "replay"
@@ -387,7 +388,7 @@ class Workload:
             tenant_id = 0
             inter_arrival_time = poisson_next_arrival_time(self.jobs_per_hour)
             job_arrival_time = last_job_arrival_time + inter_arrival_time
-
+            print(f"job_arrival_time: {job_arrival_time}")
             job_iteration_time = 1
             job_total_iteration = get_gavel_like_iter()
             # job_total_iteration = get_total_iteration_exp(5000, 600000)
@@ -396,7 +397,6 @@ class Workload:
             # job_total_iteration = get_total_iteration(5000, 500000)
             # job_total_iteration = get_total_iteration(5000, 50000)
             # job_total_iteration = get_total_iteration(360, 1080)
-            job_gpu_demand = get_job_gpu_demand()
             job_packing_score = None
             job_placement_score = None
             synergy_res_matrix = None

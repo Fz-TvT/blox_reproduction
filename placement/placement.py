@@ -7,6 +7,7 @@ from blox.deployment.grpc_client_rm import get_tput_from_job_dict
 from .All_placement import(
         Srtf_placement,
         Synergy_fifo_placement,
+        Synergy_srtf_placement,
         Fifo_placement
 )
 class JobPlacement(object):
@@ -57,39 +58,13 @@ class JobPlacement(object):
         #Borrowed from https://github.com/msr-fiddle/synergy/blob/master/simulator/resources/cluster.py#L581
         if scheduler == "Synergy_fifo":
             return Synergy_fifo_placement(new_job_schedule, cluster_state, node_info, gpu_df, active_jobs)
+        elif scheduler == "Synergy_srtf":
+            return Synergy_srtf_placement(new_job_schedule, cluster_state, node_info, gpu_df, active_jobs)
         elif scheduler == "Srtf":
            return Srtf_placement(new_job_schedule, cluster_state, node_info, gpu_df, active_jobs)
-        ##todo: add Synergy_srtf placement
         elif scheduler == "Fifo" :
             return Fifo_placement(new_job_schedule, cluster_state, node_info, gpu_df, active_jobs)
-    def _gpu_normalized_vector(self, vector: list) -> list:
-        """
-        Normalize demand vector by GPU (first element).
-        Args:
-            vector: Demand vector [gpu, cpu, mem, sspeed, ...]
-        Returns:
-            Normalized vector (per-GPU)
-        """
-        return [item / vector[0] for item in vector]
 
-
-
-    def _vector_to_map(self, demand_vec: list) -> dict:
-        """
-        Convert demand vector to resource map format.
-        Args:
-            demand_vec: Demand vector [gpu, cpu, mem, sspeed, 0]
-        Returns:
-            Dictionary with resource allocations
-        """
-        return {
-            "gpu": int(demand_vec[0]),
-            "cpu": int(demand_vec[1]),
-            "mem": float(demand_vec[2]),
-            "sspeed": float(demand_vec[3]) if len(demand_vec) > 3 else 0.0
-        }
-
-   
 
     def _consolidated_placement(
         self, job_param: dict, free_gpus: dict

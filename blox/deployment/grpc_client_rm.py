@@ -317,14 +317,7 @@ class ResourceManagerComm(object):
                 job = active_job_dict[job_id]
                 
                 # 获取 GPU 数量（数值），确保是整数类型
-                num_gpus_raw = active_job_dict[job_id]["num_GPUs_allocated"]
-                try:
-                    if isinstance(num_gpus_raw, str):
-                        num_gpus = int(num_gpus_raw) if num_gpus_raw.isdigit() else 0
-                    else:
-                        num_gpus = int(num_gpus_raw) if num_gpus_raw is not None else 0
-                except (ValueError, TypeError):
-                    num_gpus = 0
+                num_gpus = active_job_dict[job_id]["num_GPUs_allocated"]
                 
                 # 如果 num_GPUs 为 0，作业没有运行，不应该有迭代进度
                 if num_gpus == 0:

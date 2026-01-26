@@ -36,7 +36,7 @@ class Job:
         job_sspeed_demand=-1,
         job_queueing_delay=0,
         cluster_id=0,
-        job_priority=0,
+        job_priority=999,
         iter_is_duration=False):
         # logger handle
         self.logger = logging.getLogger(__name__)

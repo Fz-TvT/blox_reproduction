@@ -4,7 +4,6 @@ from operator import getitem
 
 from typing import Optional
 
-
 class Fifo(SchedulingPolicy):
     """
     Implements Fifo Scheduler
@@ -62,13 +61,9 @@ class Fifo(SchedulingPolicy):
                 And read it as they like. More on this case.
         """
         sorted_job_order = sorted(
-            job_dict.items(), key=lambda x: ( x[1]["submit_time"])
+            job_dict.items(), key=lambda x: (x[1]["job_priority"],  x[1]["submit_time"])
         )
-        for job in sorted_job_order:
-            if job[1]["time_since_scheduled"] > 1000 * 3600:
-                job[1]["job_priority"] = 1
         schedule_info = dict()
         schedule_info["job_order"] = sorted_job_order
         schedule_info["run_all_jobs"] = False
-
         return schedule_info

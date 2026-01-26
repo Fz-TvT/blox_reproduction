@@ -147,7 +147,7 @@ def Fifo_placement(new_job_schedule: dict, cluster_state: dict, node_info: dict,
                     delete_job_by_id(gpu_df, terminated_job_id)
                     free_gpus = find_free_GPUs(gpu_df)
                 
-                    placement, found, res_map, updated_server_resource_usage = self._synergy_find_placement(
+                    placement, found, res_map, updated_server_resource_usage = _synergy_find_placement(
                         job_info, node_info, gpu_df, server_resource_usage, active_jobs,
                         demand_vec[0], demand_vec[1], demand_vec[2]
                     )
@@ -180,13 +180,6 @@ def Fifo_placement(new_job_schedule: dict, cluster_state: dict, node_info: dict,
                         active_jobs[job_id]["mem_allocated"] = sum(r.get("mem", 0) for r in res_map.values()) if res_map else 0
                         active_jobs[job_id]["sspeed_allocated"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
                         
-                        # Update tput based on allocated CPU and memory
-                        allocated_cpus = active_jobs[job_id]["cpus_allocated"]
-                        allocated_mem = active_jobs[job_id]["mem_allocated"]
-                        tput_value = get_tput_from_job_dict(active_jobs[job_id], allocated_cpus, allocated_mem)
-                        if tput_value is not None and tput_value > 0:
-                            active_jobs[job_id]["tput"] = tput_value
-
                         break  # Successfully placed, exit the termination loop
     return jobs_to_terminate, job_to_launch
 
@@ -263,47 +256,21 @@ def Synergy_fifo_placement(new_job_schedule: dict, cluster_state: dict, node_inf
         cpu_d = float(demand_vec[1])
         mem_d = float(demand_vec[2])
         
-        # Define allocation callback function
-        def _call_allocate(available_gpus_dict, gpu_deficit, job_info_dict, time=None, fair=False, demand_vec=None):
-            """Callback function for _tune to attempt allocation"""
-            nonlocal server_resource_usage  # Declare nonlocal before using
-            
-            if demand_vec is None:
-                demand_vec = [gpu_deficit, 0, 0, 0]
-            
-            gpu_d_local = int(demand_vec[0])
-            cpu_d_local = float(demand_vec[1])
-            mem_d_local = float(demand_vec[2])
-            
-            # Try to find placement
-            placement, found, res_map, updated_server_resource_usage = _synergy_find_placement(
-                job_info_dict, node_info, gpu_df, server_resource_usage, active_jobs,
-                gpu_d_local, cpu_d_local, mem_d_local
+        # Create a partial function wrapper for _call_allocate with job-specific parameters
+        def _call_allocate_wrapper(available_gpus_dict, gpu_deficit, job_info_dict, time=None, fair=False, demand_vec=None):
+            """Wrapper function that calls the standalone _call_allocate with job-specific parameters"""
+            return _call_allocate(
+                available_gpus_dict, gpu_deficit, job_info_dict, job_id,
+                node_info, gpu_df, server_resource_usage, active_jobs,
+                job_to_launch, time, fair, demand_vec
             )
-            
-            # Update server_resource_usage from returned value
-            if found and updated_server_resource_usage:
-                server_resource_usage = updated_server_resource_usage
-            
-            # If placement is empty, it's not a valid placement
-            if found and (not placement or len(placement) == 0):
-                return (False, [])
-            
-            if found:
-                node_gpu_map = group_gpus_by_node(placement, gpu_df)
-                job_to_launch[job_id] = {
-                'nodes': node_gpu_map,  # Node-level placement: {node_id: [gpu_ids]}
-                'gpus': placement       # All GPU IDs (for backward compatibility)
-            }
-                return (True, placement)
-            return (False, [])
         
         # Call _tune with initial=True to start the tuning process
         # print(f"[DEBUG] Synergy_fifo: Calling _tune for job {job_id}")
         placement, found, res_map = _tune(
             job_info, demand_vec, job_gpu_deficit,
             peer_adjust=False, initial=True, final=False,
-            _call_allocate=_call_allocate,
+            _call_allocate=_call_allocate_wrapper,
             available_gpus=find_free_GPUs(gpu_df),
             time=0.0,  # Time should be passed from caller
             fair=True,
@@ -311,7 +278,9 @@ def Synergy_fifo_placement(new_job_schedule: dict, cluster_state: dict, node_inf
             gpu_df=gpu_df,
             server_resource_usage=server_resource_usage,
             active_jobs=active_jobs,
-            jobs_to_terminate=jobs_to_terminate
+            jobs_to_terminate=jobs_to_terminate,
+            job_id=job_id,
+            job_to_launch=job_to_launch
         )
         # print(f"[DEBUG] Synergy_fifo: Job {job_id} - found={found}, placement length={len(placement) if placement else 0}")
 
@@ -421,7 +390,7 @@ def Srtf_placement(new_job_schedule: dict, cluster_state: dict, node_info: dict,
                     else:
                         actual_allocated_gpus = 0
                     
-                    job_gpu_demand = job_info.get("job_gpu_demand", 0)
+                    job_gpu_demand = job_info.get("job_gpu_demand")
                     # Only skip if job has all needed GPUs and is running
                     if actual_allocated_gpus >= job_gpu_demand and job_gpu_demand > 0:
                         continue
@@ -553,12 +522,231 @@ def Srtf_placement(new_job_schedule: dict, cluster_state: dict, node_info: dict,
     return (jobs_to_terminate, job_to_launch)
 
 
+def Synergy_srtf_placement(new_job_schedule: dict, cluster_state: dict, node_info: dict, gpu_df: pd.DataFrame, active_jobs: dict) -> Tuple[List[int], Dict]:
+    """
+    Synergy-SRTF 放置方法：使用 Synergy 的资源分配逻辑，但基于 SRTF 的任务列表
+    
+    这个函数结合了：
+    - SRTF 调度器的任务排序（job_order）
+    - Synergy_fifo 的资源分配算法（_tune）
+    
+    Args:
+        new_job_schedule: 新的作业调度计划（包含 job_order，由 SRTF 调度器生成）
+        cluster_state: 集群状态对象
+        node_info: 节点信息字典
+        gpu_df: GPU 数据框
+        active_jobs: 活跃作业字典
+    
+    Returns:
+        (jobs_to_terminate, job_to_launch) 元组
+    """
+    jobs_to_terminate = list()
+    job_to_launch = dict()  # Initialize job_to_launch dictionary
+    # 使用 SRTF 的任务列表（job_order），而不是 jobs_this_round
+    jobs_this_round = new_job_schedule["job_order"]
+    
+    # Initialize server resource usage from cluster_state
+    # cluster_state.server_resource_usage is updated in update_metrics() based on running jobs' res_map
+    server_resource_usage = {}
+    if cluster_state and hasattr(cluster_state, 'server_resource_usage'):
+        # Use cluster_state.server_resource_usage as base (updated in update_metrics)
+        for node_id in node_info:
+            # Get capacity from node_info
+            cpu_capacity = node_info[node_id].get("numCPUcores", 0)
+            mem_capacity = node_info[node_id].get("memoryCapacity", 0)
+            gpu_capacity = node_info[node_id].get("numGPUs", 0)
+            # Get used resources from cluster_state (updated in update_metrics)
+            cpu_used = cluster_state.server_resource_usage.get(node_id, {}).get("cpu_used", 0)
+            mem_used = cluster_state.server_resource_usage.get(node_id, {}).get("memory_used", 0)
+            gpu_used = cluster_state.server_resource_usage.get(node_id, {}).get("gpu_used", 0)
+            # Calculate available resources (consistent with CPU and memory calculation)
+            server_resource_usage[node_id] = {
+                "gpu": max(0, gpu_capacity - gpu_used),
+                "cpu": max(0, cpu_capacity - cpu_used),
+                "memory": max(0, mem_capacity - mem_used)
+            }
+    else:
+        # Fallback: calculate from scratch if cluster_state not available
+        for node_id in node_info:
+            server_resource_usage[node_id] = get_server_available_resources(
+                node_id, node_info[node_id], gpu_df, active_jobs
+            )
+    
+    # Process each job in SRTF order using Synergy-TUNE algorithm
+    for idx, job_tuple in enumerate(jobs_this_round):
+        job_id, job_info = job_tuple
+        job = active_jobs[job_id]
+        
+        if job.get("is_running", False):
+            continue  # Skip already running jobs
+        
+        # Get job demand vector [gpu_deficit, cpu_deficit, mem_deficit, sspeed_deficit]
+        gpu_demand = job_info.get("job_gpu_demand", 0)
+        cpu_demand = job_info.get("job_cpu_demand", job_info.get("job_cpu_demand_orig", 0))
+        mem_demand = job_info.get("job_mem_demand", job_info.get("job_mem_demand_orig", 0))
+        sspeed_demand = job_info.get("job_sspeed_demand", job_info.get("job_sspeed_demand_orig", 0))
+        
+        # Calculate GPU deficit (for jobs not yet running, deficit equals demand)
+        job_gpu_deficit = gpu_demand - job.get("num_GPUs_allocated", 0)
+        
+        # If job already has all needed GPUs and resources, skip placement
+        if job_gpu_deficit == 0:
+            continue
+        
+        demand_vec = [
+            job_gpu_deficit,
+            cpu_demand - job.get("cpus_allocated", 0),
+            mem_demand - job.get("mem_allocated", 0),
+            sspeed_demand - job.get("sspeed_allocated", 0)
+        ]
+
+        # Store demand values for potential retry after timeout
+        gpu_d = int(demand_vec[0])
+        cpu_d = float(demand_vec[1])
+        mem_d = float(demand_vec[2])
+        
+        # Create a partial function wrapper for _call_allocate with job-specific parameters
+        def _call_allocate_wrapper(available_gpus_dict, gpu_deficit, job_info_dict, time=None, fair=False, demand_vec=None):
+            """Wrapper function that calls the standalone _call_allocate with job-specific parameters"""
+            return _call_allocate(
+                available_gpus_dict, gpu_deficit, job_info_dict, job_id,
+                node_info, gpu_df, server_resource_usage, active_jobs,
+                job_to_launch, time, fair, demand_vec
+            )
+        
+        # Call _tune with initial=True to start the tuning process
+        placement, found, res_map = _tune(
+            job_info, demand_vec, job_gpu_deficit,
+            peer_adjust=False, initial=True, final=False,
+            _call_allocate=_call_allocate_wrapper,
+            available_gpus=find_free_GPUs(gpu_df),
+            time=0.0,  # Time should be passed from caller
+            fair=True,
+            node_info=node_info,
+            gpu_df=gpu_df,
+            server_resource_usage=server_resource_usage,
+            active_jobs=active_jobs,
+            jobs_to_terminate=jobs_to_terminate,
+            job_id=job_id,
+            job_to_launch=job_to_launch
+        )
+
+        if found:
+            # Validate placement: must have at least one GPU
+            # Group GPUs by node for better organization
+            node_gpu_map = group_gpus_by_node(placement, gpu_df)
+            
+            # Store placement with node information
+            # Format: {job_id: {'nodes': {node_id: [gpu_ids]}, 'gpus': [all_gpu_ids]}}
+            # This provides both node-level and GPU-level information
+            job_to_launch[job_id] = {
+                'nodes': node_gpu_map,  # Node-level placement: {node_id: [gpu_ids]}
+                'gpus': placement       # All GPU IDs (for backward compatibility)
+            }
+            # Store res_map in active_jobs for later use by job.allocate()
+            active_jobs[job_id]["res_map"] = res_map
+            # Update job state with allocated resources (critical for metrics calculation)
+            actual_gpu_count = len(placement) if placement else 0
+            active_jobs[job_id]["num_GPUs_allocated"] = actual_gpu_count
+            active_jobs[job_id]["cpus_allocated"] = sum(r.get("cpu", 0) for r in res_map.values()) if res_map else 0
+            active_jobs[job_id]["mem_allocated"] = sum(r.get("mem", 0) for r in res_map.values()) if res_map else 0
+            active_jobs[job_id]["sspeed_allocated"] = sum(r.get("sspeed", 0) for r in res_map.values()) if res_map else 0
+            # Output CPU and memory allocation information
+            total_cpu = active_jobs[job_id]["cpus_allocated"]
+            total_mem = active_jobs[job_id]["mem_allocated"]
+            # print(f"Synergy_SRTF: Job {job_id} allocated - Total: GPU={actual_gpu_count}, CPU={total_cpu}, Memory={total_mem:.2f}GB")
+            if res_map:
+                for server, resources in res_map.items():
+                    node_id = server.server_id if hasattr(server, 'server_id') else server
+                    # print(f"  Node {node_id}: GPU={resources.get('gpu', 0)}, CPU={resources.get('cpu', 0)}, Memory={resources.get('mem', 0):.2f}GB")
+        else:
+            # Placement not found - log why
+            # print(f"[PLACEMENT_FAILED] Job {job_id}: Cannot find placement - GPU demand: {gpu_d}, CPU demand: {cpu_d:.2f}, Memory demand: {mem_d:.2f}")
+            # Print available resources for debugging
+            total_available_gpu = sum(server_resource_usage[node_id].get('gpu', 0) for node_id in server_resource_usage)
+            total_available_cpu = sum(server_resource_usage[node_id].get('cpu', 0) for node_id in server_resource_usage)
+            total_available_mem = sum(server_resource_usage[node_id].get('memory', 0) for node_id in server_resource_usage)
+            # print(f"  Total available resources: GPU={total_available_gpu}, CPU={total_available_cpu:.2f}, Memory={total_available_mem:.2f}")
+            for node_id in server_resource_usage:
+                available = server_resource_usage[node_id]
+                # print(f"    Node {node_id}: GPU={available.get('gpu', 0)}, CPU={available.get('cpu', 0):.2f}, Memory={available.get('memory', 0):.2f}")
+        continue
+            
+    return (jobs_to_terminate, job_to_launch)
+
+
+def _call_allocate(
+    available_gpus_dict: dict,
+    gpu_deficit: int,
+    job_info_dict: dict,
+    job_id: int,
+    node_info: dict,
+    gpu_df: pd.DataFrame,
+    server_resource_usage: dict,
+    active_jobs: dict,
+    job_to_launch: dict,
+    time: float = None,
+    fair: bool = False,
+    demand_vec: list = None
+) -> Tuple[bool, list]:
+    """
+    Callback function for _tune to attempt allocation.
+    
+    Args:
+        available_gpus_dict: Dictionary of available GPUs
+        gpu_deficit: GPU deficit for the job
+        job_info_dict: Job information dictionary
+        job_id: Job ID
+        node_info: Server information dictionary
+        gpu_df: GPU dataframe
+        server_resource_usage: Server resource usage dictionary (modified in place)
+        active_jobs: Active jobs dictionary
+        job_to_launch: Job to launch dictionary (modified in place)
+        time: Current time (optional)
+        fair: Whether to use fair-share allocation (optional)
+        demand_vec: Demand vector [gpu_deficit, cpu_deficit, mem_deficit, sspeed_deficit] (optional)
+    
+    Returns:
+        Tuple of (success: bool, placement: list)
+    """
+    if demand_vec is None:
+        demand_vec = [gpu_deficit, 0, 0, 0]
+    
+    gpu_d_local = int(demand_vec[0])
+    cpu_d_local = float(demand_vec[1])
+    mem_d_local = float(demand_vec[2])
+    
+    # Try to find placement
+    placement, found, res_map, updated_server_resource_usage = _synergy_find_placement(
+        job_info_dict, node_info, gpu_df, server_resource_usage, active_jobs,
+        gpu_d_local, cpu_d_local, mem_d_local
+    )
+    
+    # Update server_resource_usage from returned value
+    if found and updated_server_resource_usage:
+        server_resource_usage.update(updated_server_resource_usage)
+    
+    # If placement is empty, it's not a valid placement
+    if found and (not placement or len(placement) == 0):
+        return (False, [])
+    
+    if found:
+        node_gpu_map = group_gpus_by_node(placement, gpu_df)
+        job_to_launch[job_id] = {
+            'nodes': node_gpu_map,  # Node-level placement: {node_id: [gpu_ids]}
+            'gpus': placement       # All GPU IDs (for backward compatibility)
+        }
+        return (True, placement)
+    return (False, [])
+
+
 def _tune(
         job_info: dict, demand_vec: list, job_gpu_deficit: int,
         peer_adjust: bool, initial: bool, final: bool,
         _call_allocate, available_gpus: dict, time: float, fair: bool,
         node_info: dict, gpu_df: pd.DataFrame, server_resource_usage: dict,
-        active_jobs: dict, jobs_to_terminate: list
+        active_jobs: dict, jobs_to_terminate: list,
+        job_id: int = None, job_to_launch: dict = None
     ) -> Tuple[list, bool, dict]:
         """
         Tune job allocation using Synergy-TUNE algorithm.
@@ -622,7 +810,7 @@ def _tune(
                     job_info, new_demand_vec, job_gpu_deficit,
                     False, False, False, _call_allocate, available_gpus,
                     time, fair, node_info, gpu_df, server_resource_usage,
-                    active_jobs, jobs_to_terminate
+                    active_jobs, jobs_to_terminate, job_id, job_to_launch
                 )
         
         # Cannot adjust and peer not adjusted yet
@@ -631,7 +819,7 @@ def _tune(
                 job_info, demand_vec, job_gpu_deficit,
                 True, False, False, _call_allocate, available_gpus,
                 time, fair, node_info, gpu_df, server_resource_usage,
-                active_jobs, jobs_to_terminate
+                active_jobs, jobs_to_terminate, job_id, job_to_launch
             )
     
         # Peer adjust: reallocate peer jobs
