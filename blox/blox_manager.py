@@ -159,7 +159,7 @@ class BloxManager(object):
                 )
             else:
                 non_running_jobs.append(jid)
-        print(f"[DEBUG] update_metrics: Running jobs: {running_jobs}, Non-running jobs: {non_running_jobs}")
+        print(f"[DEBUG] update_metrics: Running jobs: {running_jobs}")
             # elif job_state.active_jobs[jid].get("simulation", False):
             #     # 在模拟模式下，也包含未运行的作业，以便收集它们的指标
             #     # 对于未运行的作业，ipaddress 使用空列表（模拟模式下不会使用）
@@ -501,9 +501,6 @@ class BloxManager(object):
                 gpus_to_launch = placement_info['gpus']
                 node_placement = placement_info.get('nodes', {})  # {node_id: [gpu_ids]}
                 # Print node-level placement information
-                if node_placement:
-                    for node_id, gpu_list in node_placement.items():
-                        print(f"  Node {node_id}: {len(gpu_list)} GPUs (IDs: {gpu_list})")
             else:
                 # Old format: {job_id: [gpu_ids]} (backward compatibility)
                 gpus_to_launch = placement_info

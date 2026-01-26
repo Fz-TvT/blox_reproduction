@@ -62,28 +62,12 @@ class Synergy_fifo(SchedulingPolicy):
                 And read it as they like. More on this case.
         """
         ##Synergy-tune
-        free_gpus = find_num_free_GPUs(gpu_df) ##剩余GPU数量
-        # sorted_job_order = sorted(
-        #     job_dict.items(), key=lambda x: ( x[1]["submit_time"])
-        # )
-
-        for job in job_dict:
-            job_dict[job]["time_remaining"] = (
-                job_dict[job]["job_total_iteration"]
-                - job_dict[job]["job_executed_iteration"]
-            )
-            # print(f"job_dict{job_dict[job]['time_remaining']}")
         sorted_job_order = sorted(
             job_dict.items(),
-            key=lambda x: (x[1]["job_priority"], x[1]["time_remaining"],x[1]["submit_time"])
+            key=lambda x: ( x[1]["job_priority"], x[1]["submit_time"])
         )
         jobs_this_round = sorted_job_order
-        print(f"[DEBUG] Synergy_fifo scheduler: Total jobs in dict: {len(job_dict)}, Free GPUs: {free_gpus}")
-        for job in sorted_job_order:
-            job_id, job_info = job
-            job_status = "running" if job_info.get("is_running", False) else "pending"
-            if job_info.get("time_since_scheduled") > 1000 * 3600:
-                job_info["job_priority"] = 1
+    
         schedule_info = dict()
         schedule_info["jobs_this_round"] = jobs_this_round
         schedule_info["job_order"] = sorted_job_order

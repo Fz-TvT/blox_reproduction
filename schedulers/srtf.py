@@ -38,16 +38,15 @@ class Srtf(SchedulingPolicy):
         for job_id in job_dict:
             time_since_scheduled = job_dict[job_id].get("time_since_scheduled", 0)
             # 如果作业超过1000小时未执行，提升优先级
-            if time_since_scheduled > 1 * 3600:
+            if time_since_scheduled > 100 * 3600:
                 job_dict[job_id]["job_priority"] = 1
         
         # 按优先级（降序，高优先级在前）、剩余时长（升序）、到达时间（升序）排序
         sorted_job_order = sorted(
             job_dict.items(),
             key=lambda x: (
-                x[1].get("job_priority", 0),  # 负号表示降序，高优先级在前
-                x[1].get("time_remaining", float('inf')),  # 剩余时长升序
-                x[1].get("submit_time", 0)  # 到达时间升序
+                x[1].get("job_priority"),  # 负号表示降序，高优先级在前
+                x[1].get("time_remaining")
             )
         )
         
