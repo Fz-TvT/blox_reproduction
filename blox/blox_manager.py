@@ -160,12 +160,7 @@ class BloxManager(object):
             else:
                 non_running_jobs.append(jid)
         print(f"[DEBUG] update_metrics: Running jobs: {running_jobs}")
-            # elif job_state.active_jobs[jid].get("simulation", False):
-            #     # 在模拟模式下，也包含未运行的作业，以便收集它们的指标
-            #     # 对于未运行的作业，ipaddress 使用空列表（模拟模式下不会使用）
-            #     job_id_to_fetch.append(jid)
-            #     if_simulation.append(True)
-            #     ipaddress_to_fetch_from.append([])
+        print(f"[DEBUG] update_metrics: Non-running jobs: {non_running_jobs}")
         metric_data = self.comm_node_manager.get_metrics(
             job_id_to_fetch,
             ipaddress_to_fetch_from,

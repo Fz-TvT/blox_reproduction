@@ -43,8 +43,8 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
         multigpu=True,
         small_trace=False,
         placement=True,
-        prioritize=False,
-        round_duration=6000,
+        prioritize=True,
+        round_duration=8000,
         number_of_machines=16,
         gpus_per_machine=8,
         memory_per_machine=500,
@@ -492,6 +492,7 @@ class SimulatorRunner(simulator_pb2_grpc.SimServerServicer):
             exponential=self.exponential,
             multigpu=self.multigpu,
             small_trace=self.small_trace,
+            prioritize=self.prioritize,
             series_id_filter=self.job_ids_to_track,
             model_class_split=self.model_class_split,
             # TODO: Fix this
