@@ -5,9 +5,9 @@ from operator import getitem
 from typing import Optional
 
 
-class Srtf(SchedulingPolicy):
+class Synergy_srtf(SchedulingPolicy):
     """
-    Implements Shortest remaining time first
+    Implements Synergy-SRTF Scheduler
     """
 
     def __init__(self, args):
@@ -36,7 +36,7 @@ class Srtf(SchedulingPolicy):
 
         # 检查长时间未执行的作业并提升优先级
         for job_id in job_dict:
-            time_since_scheduled = job_dict[job_id].get("time_since_scheduled")
+            time_since_scheduled = job_dict[job_id].get("time_since_scheduled", 0)
             # 如果作业超过1000小时未执行，提升优先级
             if time_since_scheduled > 100 * 3600:
                 job_dict[job_id]["job_priority"] = 1
